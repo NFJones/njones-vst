@@ -2,7 +2,7 @@
 // Project     : VST SDK
 //
 // Category    : Examples
-// Filename    : public.sdk/samples/vst/eris/source/erissimple.h
+// Filename    : public.sdk/samples/vst/eris/source/eris.h
 // Created by  : Steinberg, 04/2005
 // Description : Eris Example for VST SDK 3.0
 //
@@ -153,7 +153,7 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     bool bHalfGain;
     bool bBypass;
 
-    a2m::Converter converter;
+    a2m::Converter *converter;
 
     using UIMessageControllerList = std::vector<UIMessageController*>;
     UIMessageControllerList uiMessageControllers;

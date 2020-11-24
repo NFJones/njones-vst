@@ -6,18 +6,17 @@ if(SMTG_ADD_VSTGUI)
     set(eris_sources
         ${SDK_ROOT}/public.sdk/source/vst/vstsinglecomponenteffect.cpp
         ${SDK_ROOT}/public.sdk/source/vst/vstsinglecomponenteffect.h
-        source/erisparamids.h
-        source/eris.cpp
-        source/eris.h
-        source/version.h
-        source/erisuimessagecontroller.h
-        resource/eris.uidesc
+        src/erisparamids.h
+        src/eris.cpp
+        src/eris.h
+        src/version.h
+        src/erisuimessagecontroller.h
     )
 
-    set(target erissimple)
+    set(target eris)
     smtg_add_vst3plugin(${target} ${eris_sources})
     # set_target_properties(${target} PROPERTIES ${SDK_IDE_PLUGIN_EXAMPLES_FOLDER})
-    target_link_libraries(${target} PRIVATE sdk vstgui_support a2m-static)
+    target_link_libraries(${target} PRIVATE sdk vstgui_support a2m-static fftw3)
 
     smtg_add_vst3_resource(${target} "resource/eris.uidesc")
     smtg_add_vst3_resource(${target} "resource/background.png")

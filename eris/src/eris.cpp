@@ -15,6 +15,7 @@
 #include "pluginterfaces/vst/vstpresetkeys.h"  // for use of IStreamAttributes
 
 #include "vstgui/plugin-bindings/vst3editor.h"
+#include "public.sdk/source/main/dllmain.cpp"
 
 #include <cmath>
 #include <cstdio>
@@ -91,7 +92,7 @@ Eris::Eris()
       fGainReduction(0.f),
       fVuPPMOld(0.f),
       currentProcessMode(-1),
-      converter(0, 0),
+      converter(nullptr),
       bHalfGain(false),
       bBypass(false) {}
 
@@ -326,36 +327,36 @@ int Eris::time_window_to_block_size() {
 }
 
 std::vector<std::vector<a2m::Note>> Eris::convert(Sample32** channel, int channels, int nsamples) {
-    converter.set_samplerate(processSetup.sampleRate);
-    converter.set_block_size(block_size);
+    // converter.set_samplerate(processSetup.sampleRate);
+    // converter.set_block_size(block_size);
 
     std::vector<std::vector<a2m::Note>> notes;
 
-    for (size_t i = 0; i < channels; ++i) {
-        std::vector<double> samples(channel[i], channel[i] + nsamples);
-        notes.push_back(std::vector<a2m::Note>());
-        for (size_t block = 0; block < nsamples / block_size; ++block) {
-            for (auto& note : converter.convert(samples.data() + block * block_size))
-                notes[i].push_back(note);
-        }
-    }
+    // for (size_t i = 0; i < channels; ++i) {
+    //     std::vector<double> samples(channel[i], channel[i] + nsamples);
+    //     notes.push_back(std::vector<a2m::Note>());
+    //     for (size_t block = 0; block < nsamples / block_size; ++block) {
+    //         for (auto& note : converter.convert(samples.data() + block * block_size))
+    //             notes[i].push_back(note);
+    //     }
+    // }
 
     return notes;
 }
 
 std::vector<std::vector<a2m::Note>> Eris::convert(Sample64** channel, int channels, int nsamples) {
-    converter.set_samplerate(processSetup.sampleRate);
-    converter.set_block_size(block_size);
+    // converter.set_samplerate(processSetup.sampleRate);
+    // converter.set_block_size(block_size);
 
     std::vector<std::vector<a2m::Note>> notes;
 
-    for (size_t i = 0; i < channels; ++i) {
-        notes.push_back(std::vector<a2m::Note>());
-        for (size_t block = 0; block < nsamples / block_size; ++block) {
-            for (auto& note : converter.convert(channel[i] + block * block_size))
-                notes[i].push_back(note);
-        }
-    }
+    // for (size_t i = 0; i < channels; ++i) {
+    //     notes.push_back(std::vector<a2m::Note>());
+    //     for (size_t block = 0; block < nsamples / block_size; ++block) {
+    //         for (auto& note : converter.convert(channel[i] + block * block_size))
+    //             notes[i].push_back(note);
+    //     }
+    // }
 
     return notes;
 }
@@ -662,7 +663,7 @@ bool DeinitModule() {
 }
 
 //------------------------------------------------------------------------
-BEGIN_FACTORY_DEF("Steinberg Media Technologies", "http://www.steinberg.net", "mailto:info@steinberg.de")
+BEGIN_FACTORY_DEF("Neil Jones", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
 
 //---First plug-in included in this factory-------
 // its kVstAudioEffectClass component
