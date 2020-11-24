@@ -43,3 +43,4 @@ BEGIN
     END
 END
 
+myEditor.uidesc DATA "eris.uidesc"

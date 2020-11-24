@@ -47,6 +47,8 @@
 #include "vstgui/plugin-bindings/vst3editor.h"
 
 #include <a2m/converter.h>
+#include <map>
+#include <mutex>
 
 namespace Steinberg {
 namespace Vst {
@@ -142,27 +144,50 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     //------------------------------------------------------------------------
    private:
     // our model values
-	double time_window;
-	int block_size;
-    float fGain;
-    float fGainReduction;
-    float fVuPPMOld;
+    std::map<size_t, std::map<unsigned int, bool>> note_state;
+    std::vector<std::vector<double>> sample_buffer;
+    int remaining_samples;
+    int32 time_window;
+    int32 block_size;
+    int32 note_count;
+    int spill_samples;
+    std::recursive_mutex lock;
 
     int32 currentProcessMode;
 
-    bool bHalfGain;
-    bool bBypass;
-
-    a2m::Converter *converter;
+    a2m::Converter converter;
 
     using UIMessageControllerList = std::vector<UIMessageController*>;
     UIMessageControllerList uiMessageControllers;
 
     String128 defaultMessageText;
 
-	int time_window_to_block_size();
-    std::vector<std::vector<a2m::Note>> convert(Sample32** channel, int channels, int nsamples);
-    std::vector<std::vector<a2m::Note>> convert(Sample64** channel, int channels, int nsamples);
+    int time_window_to_block_size();
+    void set_time_window(const int32 time_window);
+    void clear_buffers();
+    void terminate_notes(int offset);
+    std::vector<std::vector<a2m::Note>> convert(int channels);
+    void terminate_notes(int offset, ProcessData& data);
+    void add_notes(const std::vector<std::vector<a2m::Note>>& notes, int offset, ProcessData& data);
+
+    template<class T>
+    int buffer_samples(const int channel, T* samples, const int nsamples) {
+        while (sample_buffer.size() < channel + 1)
+            sample_buffer.push_back(std::vector<double>(block_size));
+
+        int index = spill_samples;
+        while (index < nsamples) {
+            sample_buffer[channel][index] = *(samples + index);
+            index++;
+        }
+
+        if (nsamples < block_size)
+            spill_samples = index;
+        else
+            spill_samples = 0;
+
+        return index;
+    }
 };
 
 //------------------------------------------------------------------------
