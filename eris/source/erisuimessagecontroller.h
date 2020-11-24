@@ -2,9 +2,9 @@
 // Project     : VST SDK
 //
 // Category    : Examples
-// Filename    : public.sdk/samples/vst/again/source/againuimessagecontroller.h
+// Filename    : public.sdk/samples/vst/eris/source/erisuimessagecontroller.h
 // Created by  : Steinberg, 04/2005
-// Description : AGain UI Message Controller
+// Description : Eris UI Message Controller
 //
 //-----------------------------------------------------------------------------
 // LICENSE
@@ -44,10 +44,10 @@ namespace Steinberg {
 namespace Vst {
 
 //------------------------------------------------------------------------
-// AGainUIMessageController
+// ErisUIMessageController
 //------------------------------------------------------------------------
 template <typename ControllerType>
-class AGainUIMessageController : public VSTGUI::IController, public VSTGUI::ViewListenerAdapter
+class ErisUIMessageController : public VSTGUI::IController, public VSTGUI::ViewListenerAdapter
 {
 public:
 	enum Tags
@@ -55,14 +55,14 @@ public:
 		kSendMessageTag = 1000
 	};
 
-	AGainUIMessageController (ControllerType* againController) : againController (againController), textEdit (nullptr)
+	ErisUIMessageController (ControllerType* erisController) : erisController (erisController), textEdit (nullptr)
 	{
 	}
-	~AGainUIMessageController () override
+	~ErisUIMessageController () override
 	{
 		if (textEdit)
 			viewWillDelete (textEdit);
-		againController->removeUIMessageController (this);
+		erisController->removeUIMessageController (this);
 	}
 
 	void setMessageText (String128 msgText)
@@ -91,12 +91,12 @@ private:
 		{
 			if (pControl->getValueNormalized () > 0.5f)
 			{
-				againController->sendTextMessage (textEdit->getText ().data ());
+				erisController->sendTextMessage (textEdit->getText ().data ());
 				pControl->setValue (0.f);
 				pControl->invalid ();
 
 				//---send a binary message
-				if (IPtr<IMessage> message = owned (againController->allocateMessage ()))
+				if (IPtr<IMessage> message = owned (erisController->allocateMessage ()))
 				{
 					message->setMessageID ("BinaryMessage");
 					uint32 size = 100;
@@ -106,7 +106,7 @@ private:
 					for (uint32 i = 0; i < size; i++)
 						data[i] = i;
 					message->getAttributes ()->setBinary ("MyData", data, size);
-					againController->sendMessage (message);
+					erisController->sendMessage (message);
 				}
 			}
 		}
@@ -125,7 +125,7 @@ private:
 			textEdit->registerViewListener (this);
 
 			// initialize it content
-			String str (againController->getDefaultMessageText ());
+			String str (erisController->getDefaultMessageText ());
 			str.toMultiByte (kCP_Utf8);
 			textEdit->setText (str.text8 ());
 		}
@@ -152,10 +152,10 @@ private:
 			String str;
 			str.fromUTF8 (text.data ());
 			str.copyTo (messageText, 0, 128);
-			againController->setDefaultMessageText (messageText);
+			erisController->setDefaultMessageText (messageText);
 		}
 	}
-	ControllerType* againController;
+	ControllerType* erisController;
 	CTextEdit* textEdit;
 };
 

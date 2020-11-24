@@ -2,10 +2,9 @@
 // Project     : VST SDK
 //
 // Category    : Examples
-// Filename    : public.sdk/samples/vst/again/source/version.h
-// Created by  : Steinberg, 01/2008
-// Description : Example of handle the versioning and copyright info of again plug-in 
-//				 used for the resources (RC file for example)
+// Filename    : public.sdk/samples/vst/eris/source/erisparamids.h
+// Created by  : Steinberg, 12/2007
+// Description : define the parameter IDs used by Eris
 //
 //-----------------------------------------------------------------------------
 // LICENSE
@@ -37,32 +36,11 @@
 
 #pragma once
 
-#include "pluginterfaces/base/fplatform.h"
-
-#define MAJOR_VERSION_STR "1"
-#define MAJOR_VERSION_INT 1
-
-#define SUB_VERSION_STR "3"
-#define SUB_VERSION_INT 3
-
-#define RELEASE_NUMBER_STR "0"
-#define RELEASE_NUMBER_INT 0
-
-#define BUILD_NUMBER_STR "1" // Build number to be sure that each result could identified.
-#define BUILD_NUMBER_INT 1
-
-// Version with build number (example "1.0.3.342")
-#define FULL_VERSION_STR MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR "." BUILD_NUMBER_STR
-
-// Version without build number (example "1.0.3")
-#define VERSION_STR MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR
-
-#define stringOriginalFilename	"again.vst3"
-#if SMTG_PLATFORM_64
-#define stringFileDescription	"AGain VST3-SDK (64Bit)"
-#else
-#define stringFileDescription	"AGain VST3-SDK"
-#endif
-#define stringCompanyName		"Steinberg Media Technologies\0"
-#define stringLegalCopyright	"© 2020 Steinberg Media Technologies"
-#define stringLegalTrademarks	"VST is a trademark of Steinberg Media Technologies GmbH"
+enum
+{
+	/** parameter ID */
+	kGainId = 0,	///< for the gain value (is automatable)
+	kVuPPMId,		///< for the Vu value return to host (ReadOnly parameter for our UI)
+	kBypassId,		///< Bypass value (we will handle the bypass process) (is automatable)
+	kTimeWindowId
+};

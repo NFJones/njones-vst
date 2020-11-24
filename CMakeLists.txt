@@ -1,6 +1,11 @@
 cmake_minimum_required (VERSION 3.4.3)
 
-project(a2m-vst)
+project(njones-vst)
+
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+endif()
 
 option(SMTG_ADD_VST3_PLUGINS_SAMPLES "Add VST3 Plug-ins Samples to the solution" OFF)
 option(SMTG_ADD_VSTGUI "Add VSTGUI Support" ON)
@@ -13,6 +18,6 @@ include(SMTG_VST3_SDK)
 
 smtg_setup_platform_toolset()
 
-add_subdirectory(src)
+add_subdirectory(eris)
 add_subdirectory(a2m)
 add_subdirectory(vst3sdk)

@@ -2,9 +2,10 @@
 // Project     : VST SDK
 //
 // Category    : Examples
-// Filename    : public.sdk/samples/vst/again/source/againcids.h
-// Created by  : Steinberg, 12/2007
-// Description : define the class IDs for AGain
+// Filename    : public.sdk/samples/vst/eris/source/version.h
+// Created by  : Steinberg, 01/2008
+// Description : Example of handle the versioning and copyright info of eris plug-in 
+//				 used for the resources (RC file for example)
 //
 //-----------------------------------------------------------------------------
 // LICENSE
@@ -36,18 +37,32 @@
 
 #pragma once
 
-namespace Steinberg {
-namespace Vst {
+#include "pluginterfaces/base/fplatform.h"
 
-// Here are defined the UIDs for the 2 processors (2 plug-ins) and 1 controller (shared by the 2 plug-ins) 
-static const FUID AGainProcessorUID (0x84E8DE5F, 0x92554F53, 0x96FAE413, 0x3C935A18);
-static const FUID AGainWithSideChainProcessorUID (0x41347FD6, 0xFED64094, 0xAFBB12B7, 0xDBA1D441);
+#define MAJOR_VERSION_STR "1"
+#define MAJOR_VERSION_INT 1
 
-static const FUID AGainControllerUID (0xD39D5B65, 0xD7AF42FA, 0x843F4AC8, 0x41EB04F0);
+#define SUB_VERSION_STR "3"
+#define SUB_VERSION_INT 3
 
+#define RELEASE_NUMBER_STR "0"
+#define RELEASE_NUMBER_INT 0
 
-#define AGainVST3Category "Fx"
+#define BUILD_NUMBER_STR "1" // Build number to be sure that each result could identified.
+#define BUILD_NUMBER_INT 1
 
-//------------------------------------------------------------------------
-} // namespace Vst
-} // namespace Steinberg
+// Version with build number (example "1.0.3.342")
+#define FULL_VERSION_STR MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR "." BUILD_NUMBER_STR
+
+// Version without build number (example "1.0.3")
+#define VERSION_STR MAJOR_VERSION_STR "." SUB_VERSION_STR "." RELEASE_NUMBER_STR
+
+#define stringOriginalFilename	"eris.vst3"
+#if SMTG_PLATFORM_64
+#define stringFileDescription	"Eris VST3-SDK (64Bit)"
+#else
+#define stringFileDescription	"Eris VST3-SDK"
+#endif
+#define stringCompanyName		"Steinberg Media Technologies\0"
+#define stringLegalCopyright	"© 2020 Steinberg Media Technologies"
+#define stringLegalTrademarks	"VST is a trademark of Steinberg Media Technologies GmbH"
