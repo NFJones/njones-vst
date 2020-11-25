@@ -52,7 +52,7 @@ TimeWindowParameter::TimeWindowParameter(int32 flags, int32 id) {
     info.flags = flags;
     info.id = id;
     info.stepCount = 0;
-    info.defaultNormalizedValue = 5 / 5000.0;
+    info.defaultNormalizedValue = 5 / 1000.0;
     info.unitId = kRootUnitId;
 
     setNormalized(info.defaultNormalizedValue);
@@ -60,7 +60,9 @@ TimeWindowParameter::TimeWindowParameter(int32 flags, int32 id) {
 
 void TimeWindowParameter::toString(ParamValue normValue, String128 string) const {
     char text[32];
-    sprintf(text, "%d", static_cast<int>(normValue * 5000));
+    int val = static_cast<int>(normValue * 1000);
+    val = (val > 5) ? val : 5;
+    sprintf(text, "%d", val);
 
     Steinberg::UString(string, 128).fromAscii(text);
 }
@@ -69,7 +71,7 @@ bool TimeWindowParameter::fromString(const TChar* string, ParamValue& normValue)
     Steinberg::UString wrapper((TChar*)string, -1);  // don't know buffer size here!
     int64 tmp = 0;
     if (wrapper.scanInt(tmp)) {
-        normValue = tmp / 5000.0;
+        normValue = tmp / 1000.0;
         return true;
     }
     return false;
@@ -113,10 +115,49 @@ bool NoteCountParameter::fromString(const TChar* string, ParamValue& normValue) 
     return false;
 }
 
+class TransposeParameter : public Parameter {
+   public:
+    TransposeParameter(int32 flags, int32 id);
+
+    void toString(ParamValue normValue, String128 string) const SMTG_OVERRIDE;
+    bool fromString(const TChar* string, ParamValue& normValue) const SMTG_OVERRIDE;
+};
+
+TransposeParameter::TransposeParameter(int32 flags, int32 id) {
+    Steinberg::UString(info.title, USTRINGSIZE(info.title)).assign(USTRING("Transpose"));
+    Steinberg::UString(info.units, USTRINGSIZE(info.units)).assign(USTRING("notes"));
+
+    info.flags = flags;
+    info.id = id;
+    info.stepCount = 0;
+    info.defaultNormalizedValue = 0.0;
+    info.unitId = kRootUnitId;
+
+    setNormalized(info.defaultNormalizedValue);
+}
+
+void TransposeParameter::toString(ParamValue normValue, String128 string) const {
+    char text[32];
+    sprintf(text, "%d", static_cast<int>(normValue * 256.0) - 128);
+
+    Steinberg::UString(string, 128).fromAscii(text);
+}
+
+bool TransposeParameter::fromString(const TChar* string, ParamValue& normValue) const {
+    Steinberg::UString wrapper((TChar*)string, -1);  // don't know buffer size here!
+    int64 tmp = 0;
+    if (wrapper.scanInt(tmp)) {
+        normValue = (tmp + 128) / 256.0;
+        return true;
+    }
+    return false;
+}
+
 Eris::Eris()
     : time_window(5),
       block_size(0),
       note_count(0),
+      transpose(0),
       currentProcessMode(-1),
       converter(processSetup.sampleRate, 0),
       spill_samples(0) {
@@ -138,6 +179,9 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
 
     auto* note_count_param = new NoteCountParameter(ParameterInfo::kCanAutomate, kNoteCountId);
     parameters.addParameter(note_count_param);
+
+    auto* transpose_param = new TransposeParameter(ParameterInfo::kCanAutomate, kTransposeId);
+    parameters.addParameter(transpose_param);
 
     return result;
 }
@@ -194,12 +238,16 @@ tresult PLUGIN_API Eris::process(ProcessData& data) {
                     switch (paramQueue->getParameterId()) {
                         case kTimeWindowId:
                             if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
-                                set_time_window(5000 * value);
+                                set_time_window(1000 * value);
                             block_size = time_window_to_block_size();
                             break;
                         case kNoteCountId:
                             if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
                                 note_count = 127 * value;
+                            break;
+                        case kTransposeId:
+                            if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
+                                transpose = 256 * value - 128;
                             break;
                     }
                 }
@@ -281,6 +329,7 @@ std::vector<std::vector<a2m::Note>> Eris::convert(int channels) {
     converter.set_samplerate(processSetup.sampleRate);
     converter.set_block_size(block_size);
     converter.set_note_count(note_count);
+    converter.set_transpose(transpose);
 
     std::vector<std::vector<a2m::Note>> notes;
 
@@ -306,11 +355,17 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     if (streamer.readInt32(saved_note_count) == false)
         return kResultFalse;
 
+    int32 saved_transpose = 0;
+    if (streamer.readInt32(saved_transpose) == false)
+        return kResultFalse;
+
     set_time_window(saved_time_window);
     note_count = saved_note_count;
+    transpose = saved_transpose;
 
-    setParamNormalized(kTimeWindowId, saved_time_window);
+    setParamNormalized(kTimeWindowId, time_window);
     setParamNormalized(kNoteCountId, note_count);
+    setParamNormalized(kTransposeId, transpose);
 
     return kResultOk;
 }
@@ -320,6 +375,7 @@ tresult PLUGIN_API Eris::getState(IBStream* state) {
 
     streamer.writeInt32(time_window);
     streamer.writeInt32(note_count);
+    streamer.writeInt32(transpose);
 
     return kResultOk;
 }

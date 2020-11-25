@@ -42,4 +42,6 @@ enum
 	kRootUnitId = 0,
 	kTimeWindowId,
 	kNoteCountId,
+	kPitchSetId,
+	kTransposeId,
 };

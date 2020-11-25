@@ -148,6 +148,8 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     std::vector<std::vector<double>> sample_buffer;
     int remaining_samples;
     int32 time_window;
+    std::vector<int> pitch_set;
+    int transpose;
     int32 block_size;
     int32 note_count;
     int spill_samples;
