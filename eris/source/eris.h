@@ -50,6 +50,8 @@
 #include <map>
 #include <mutex>
 
+#include "block_processor.h"
+
 namespace Steinberg {
 namespace Vst {
 
@@ -117,43 +119,24 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     TChar* getDefaultMessageText();
 
     //------------------------------------------------------------------------
-    template <typename SampleType>
-    SampleType processAudio(SampleType** in, SampleType** out, int32 numChannels, int32 sampleFrames, float gain) {
-        SampleType vuPPM = 0;
-
-        // in real plug-in it would be better to do dezippering to avoid jump (click) in gain value
-        for (int32 i = 0; i < numChannels; i++) {
-            int32 samples = sampleFrames;
-            auto* ptrIn = (SampleType*)in[i];
-            auto* ptrOut = (SampleType*)out[i];
-            SampleType tmp;
-            while (--samples >= 0) {
-                // apply gain
-                tmp = (*ptrIn++) * gain;
-                (*ptrOut++) = tmp;
-
-                // check only positive values
-                if (tmp > vuPPM) {
-                    vuPPM = tmp;
-                }
-            }
-        }
-        return vuPPM;
-    }
-
-    //------------------------------------------------------------------------
    private:
     // our model values
-    std::map<size_t, std::map<unsigned int, bool>> note_state;
-    std::vector<std::vector<double>> sample_buffer;
-    int remaining_samples;
-    int32 time_window;
-    std::vector<int> pitch_set;
-    int transpose;
-    int32 block_size;
+    int32 time_window_param;
     int32 note_count;
-    int spill_samples;
-    std::recursive_mutex lock;
+    bool sync;
+    int beat_numerator;
+    int beat_denominator;
+    bool combine_notes;
+
+    std::map<int, std::map<unsigned int, bool>> note_state;
+    njones::BlockProcessor<Sample32> buffer_32;
+    njones::BlockProcessor<Sample64> buffer_64;
+
+    int32 time_window;
+    int32 block_size;
+    int event_offset;
+    int buffer_index;
+    float tempo;
 
     int32 currentProcessMode;
 
@@ -166,30 +149,12 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
 
     int time_window_to_block_size();
     void set_time_window(const int32 time_window);
+    void set_beat();
     void clear_buffers();
-    void terminate_notes(int offset);
-    std::vector<std::vector<a2m::Note>> convert(int channels);
-    void terminate_notes(int offset, ProcessData& data);
-    void add_notes(const std::vector<std::vector<a2m::Note>>& notes, int offset, ProcessData& data);
-
-    template<class T>
-    int buffer_samples(const int channel, T* samples, const int nsamples) {
-        while (sample_buffer.size() < channel + 1)
-            sample_buffer.push_back(std::vector<double>(block_size));
-
-        int index = spill_samples;
-        while (index < nsamples) {
-            sample_buffer[channel][index] = *(samples + index);
-            index++;
-        }
-
-        if (nsamples < block_size)
-            spill_samples = index;
-        else
-            spill_samples = 0;
-
-        return index;
-    }
+    void process_parameters(ProcessData& data);
+    void convert(ProcessData& data);
+    void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes);
+    void initiate_notes(const int channel, const std::vector<a2m::Note>& notes, int offset, ProcessData& data);
 };
 
 //------------------------------------------------------------------------

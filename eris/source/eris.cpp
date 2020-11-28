@@ -77,92 +77,22 @@ bool TimeWindowParameter::fromString(const TChar* string, ParamValue& normValue)
     return false;
 }
 
-class NoteCountParameter : public Parameter {
-   public:
-    NoteCountParameter(int32 flags, int32 id);
-
-    void toString(ParamValue normValue, String128 string) const SMTG_OVERRIDE;
-    bool fromString(const TChar* string, ParamValue& normValue) const SMTG_OVERRIDE;
-};
-
-NoteCountParameter::NoteCountParameter(int32 flags, int32 id) {
-    Steinberg::UString(info.title, USTRINGSIZE(info.title)).assign(USTRING("Note Count"));
-    Steinberg::UString(info.units, USTRINGSIZE(info.units)).assign(USTRING("notes"));
-
-    info.flags = flags;
-    info.id = id;
-    info.stepCount = 0;
-    info.defaultNormalizedValue = 0.0;
-    info.unitId = kRootUnitId;
-
-    setNormalized(info.defaultNormalizedValue);
-}
-
-void NoteCountParameter::toString(ParamValue normValue, String128 string) const {
-    char text[32];
-    sprintf(text, "%d", static_cast<int>(normValue * 127.0));
-
-    Steinberg::UString(string, 128).fromAscii(text);
-}
-
-bool NoteCountParameter::fromString(const TChar* string, ParamValue& normValue) const {
-    Steinberg::UString wrapper((TChar*)string, -1);  // don't know buffer size here!
-    int64 tmp = 0;
-    if (wrapper.scanInt(tmp)) {
-        normValue = tmp / 127.0;
-        return true;
-    }
-    return false;
-}
-
-class TransposeParameter : public Parameter {
-   public:
-    TransposeParameter(int32 flags, int32 id);
-
-    void toString(ParamValue normValue, String128 string) const SMTG_OVERRIDE;
-    bool fromString(const TChar* string, ParamValue& normValue) const SMTG_OVERRIDE;
-};
-
-TransposeParameter::TransposeParameter(int32 flags, int32 id) {
-    Steinberg::UString(info.title, USTRINGSIZE(info.title)).assign(USTRING("Transpose"));
-    Steinberg::UString(info.units, USTRINGSIZE(info.units)).assign(USTRING("notes"));
-
-    info.flags = flags;
-    info.id = id;
-    info.stepCount = 0;
-    info.defaultNormalizedValue = 0.0;
-    info.unitId = kRootUnitId;
-
-    setNormalized(info.defaultNormalizedValue);
-}
-
-void TransposeParameter::toString(ParamValue normValue, String128 string) const {
-    char text[32];
-    sprintf(text, "%d", static_cast<int>(normValue * 256.0) - 128);
-
-    Steinberg::UString(string, 128).fromAscii(text);
-}
-
-bool TransposeParameter::fromString(const TChar* string, ParamValue& normValue) const {
-    Steinberg::UString wrapper((TChar*)string, -1);  // don't know buffer size here!
-    int64 tmp = 0;
-    if (wrapper.scanInt(tmp)) {
-        normValue = (tmp + 128) / 256.0;
-        return true;
-    }
-    return false;
-}
-
 Eris::Eris()
     : time_window(5),
+      time_window_param(5),
       block_size(0),
       note_count(0),
-      transpose(0),
+      sync(false),
+      beat_numerator(1),
+      beat_denominator(4),
+      combine_notes(false),
       currentProcessMode(-1),
-      converter(processSetup.sampleRate, 0),
-      spill_samples(0) {
+      converter(processSetup.sampleRate, 0) {
     clear_buffers();
-    set_time_window(5);
+    set_time_window(time_window_param);
+    for (int32 channel = 0; channel < 2; ++channel)
+        if (note_state.find(channel) == note_state.end())
+            note_state[channel] = std::map<unsigned int, bool>();
 }
 
 tresult PLUGIN_API Eris::initialize(FUnknown* context) {
@@ -172,16 +102,27 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
 
     addAudioInput(STR16("Stereo In"), SpeakerArr::kStereo);
     addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
-    addEventOutput(STR16("Event Out"), 1);
+    addEventOutput(STR16("Event Out"), 2);
 
-    auto* time_window_param = new TimeWindowParameter(ParameterInfo::kCanAutomate, kTimeWindowId);
+    auto* time_window_param = new RangeParameter(STR16("Time Window"), kTimeWindowId, nullptr, 5.0, 1000.0, 5.0, 995);
     parameters.addParameter(time_window_param);
 
-    auto* note_count_param = new NoteCountParameter(ParameterInfo::kCanAutomate, kNoteCountId);
+    auto* note_count_param = new RangeParameter(STR16("Note Count"), kNoteCountId, nullptr, 0.0, 127.0, 0.0, 127);
     parameters.addParameter(note_count_param);
 
-    auto* transpose_param = new TransposeParameter(ParameterInfo::kCanAutomate, kTransposeId);
-    parameters.addParameter(transpose_param);
+    auto* sync_param = new RangeParameter(STR16("Sync"), kSyncId, nullptr, 0.0, 1.0, 0.0, 1);
+    parameters.addParameter(sync_param);
+
+    auto* beat_numerator_param =
+        new RangeParameter(STR16("Beat Numerator"), kBeatNumeratorId, nullptr, 1.0, 16.0, 1.0, 15);
+    parameters.addParameter(beat_numerator_param);
+
+    auto* beat_denominator_param =
+        new RangeParameter(STR16("Beat Denominator"), kBeatDenominatorId, nullptr, 1.0, 16.0, 1.0, 15);
+    parameters.addParameter(beat_denominator_param);
+
+    auto* combine_notes_param = new RangeParameter(STR16("Combine Notes"), kCombineNotesId, nullptr, 0.0, 1.0, 0.0, 1);
+    parameters.addParameter(combine_notes_param);
 
     return result;
 }
@@ -200,110 +141,131 @@ tresult PLUGIN_API Eris::setActive(TBool state) {
     return kResultOk;
 }
 
-void Eris::terminate_notes(int offset, ProcessData& data) {
-    for (auto& channel : note_state)
-        for (auto& state : channel.second) {
-            if (state.second) {
-                NoteOffEvent note_off{static_cast<int16>(channel.first), static_cast<int16>(state.first), 0.0, -1, 0.0};
-                Event event{0, offset, 0, Event::kIsLive, Event::kNoteOffEvent};
+void Eris::terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes) {
+    for (auto& state : note_state.at(channel)) {
+        if (state.second) {
+            if ((!combine_notes) || (combine_notes && (find(new_notes.begin(), new_notes.end(),
+                                                            a2m::Note(state.first, 0)) == new_notes.end()))) {
+                NoteOffEvent note_off{static_cast<int16>(channel), static_cast<int16>(state.first), 0.0f, -1, 0.0f};
+                Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOffEvent};
                 event.noteOff = note_off;
                 data.outputEvents->addEvent(event);
-                state.second = false;
+                note_state.at(channel)[state.first] = false;
             }
         }
+    }
 }
 
-void Eris::add_notes(const std::vector<std::vector<a2m::Note>>& notes, int offset, ProcessData& data) {
-    for (size_t channel = 0; channel < notes.size(); ++channel)
-        for (auto& note : notes[channel]) {
-            NoteOnEvent note_on{channel, note.pitch, 0.0, note.velocity / 127.0, 0, -1};
-            Event event{0, offset, 0, Event::kIsLive, Event::kNoteOnEvent};
+void Eris::initiate_notes(const int channel, const std::vector<a2m::Note>& notes, int offset, ProcessData& data) {
+    for (auto& note : notes) {
+        NoteOnEvent note_on{static_cast<int16>(channel),
+                            static_cast<int16>(note.pitch),
+                            0.0f,
+                            static_cast<float>(note.velocity / 127.0),
+                            0,
+                            -1};
+        if ((!combine_notes) || (combine_notes && !note_state.at(channel)[note.pitch])) {
+            Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOnEvent};
             event.noteOn = note_on;
             data.outputEvents->addEvent(event);
-            note_state[channel][note.pitch] = true;
+            note_state.at(channel)[note.pitch] = true;
         }
+    }
+}
+
+void Eris::convert(ProcessData& data) {
+    void** in = getChannelBuffersPointer(processSetup, data.inputs[0]);
+    converter.set_samplerate(processSetup.sampleRate);
+    converter.set_block_size(block_size);
+    converter.set_note_count(note_count);
+    std::function<void(const int, double*, const int)> processor = [&](const int channel, double* samples,
+                                                                       const int event_offset) -> void {
+        auto notes = converter.convert(samples);
+        terminate_notes(channel, event_offset, data, notes);
+        initiate_notes(channel, notes, event_offset, data);
+    };
+
+    if (data.symbolicSampleSize == kSample32) {
+        buffer_32.resize(2, block_size);
+        buffer_32.set_processor(processor);
+        buffer_32.add((Sample32**)in, data.numSamples);
+    } else {
+        buffer_64.resize(2, block_size);
+        buffer_64.set_processor(processor);
+        buffer_64.add((Sample64**)in, data.numSamples);
+    }
 }
 
 tresult PLUGIN_API Eris::process(ProcessData& data) {
-    try {
-        IParameterChanges* paramChanges = data.inputParameterChanges;
-        if (paramChanges) {
-            int32 numParamsChanged = paramChanges->getParameterCount();
-            for (int32 i = 0; i < numParamsChanged; i++) {
-                IParamValueQueue* paramQueue = paramChanges->getParameterData(i);
-                if (paramQueue) {
-                    ParamValue value;
-                    int32 sampleOffset;
-                    int32 numPoints = paramQueue->getPointCount();
-                    switch (paramQueue->getParameterId()) {
-                        case kTimeWindowId:
-                            if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
-                                set_time_window(1000 * value);
-                            block_size = time_window_to_block_size();
-                            break;
-                        case kNoteCountId:
-                            if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
-                                note_count = 127 * value;
-                            break;
-                        case kTransposeId:
-                            if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
-                                transpose = 256 * value - 128;
-                            break;
-                    }
-                }
-            }
-        }
-
-        if (data.numInputs == 0 || data.numOutputs == 0)
-            return kResultOk;
-
-        int32 numChannels = data.inputs[0].numChannels;
-
-        uint32 sampleFramesSize = getSampleFramesSizeInBytes(processSetup, data.numSamples);
-        void** in = getChannelBuffersPointer(processSetup, data.inputs[0]);
-        void** out = getChannelBuffersPointer(processSetup, data.outputs[0]);
-
-        if (data.inputs[0].silenceFlags != 0) {
-            data.outputs[0].silenceFlags = data.inputs[0].silenceFlags;
-
-            for (int32 i = 0; i < numChannels; i++)
-                if (in[i] != out[i])
-                    memset(out[i], 0, sampleFramesSize);
-
-            return kResultOk;
-        }
-
-        data.outputs[0].silenceFlags = 0;
-
-        for (size_t channel = 0; channel < numChannels; ++channel)
-            if (note_state.find(channel) == note_state.end())
-                note_state[channel] = std::map<unsigned int, bool>();
-
-        int offset = 0;
-        int event_offset = -spill_samples;
-        int remaining = data.numSamples + spill_samples;
-        while (remaining > 0) {
-            int count = (remaining >= block_size) ? block_size : remaining;
-            for (size_t i = 0; i < numChannels; ++i) {
-                if (data.symbolicSampleSize == kSample32)
-                    remaining -= buffer_samples<Sample32>(i, ((Sample32**)in)[i] + offset, count);
-                else
-                    remaining -= buffer_samples<Sample64>(i, ((Sample64**)in)[i] + offset, count);
-            }
-
-            if (count == block_size) {
-                terminate_notes(event_offset, data);
-                add_notes(convert(numChannels), event_offset, data);
-                event_offset += count;
-            }
-
-            offset += count;
-        }
-    } catch (const std::exception& e) {
-        log(fmt::format("Error: {}", e.what()));
+    process_parameters(data);
+    if (data.numInputs == 0 || data.numOutputs == 0)
+        return kResultOk;
+    if (data.inputs[0].silenceFlags == 0) {
+        data.outputs[0].silenceFlags = 1;
+        convert(data);
     }
 
     return kResultOk;
+}
+
+void Eris::process_parameters(ProcessData& data) {
+    IParameterChanges* paramChanges = data.inputParameterChanges;
+    if (paramChanges) {
+        int32 numParamsChanged = paramChanges->getParameterCount();
+        for (int32 i = 0; i < numParamsChanged; i++) {
+            IParamValueQueue* paramQueue = paramChanges->getParameterData(i);
+            if (paramQueue) {
+                ParamValue value;
+                int32 sampleOffset;
+                int32 numPoints = paramQueue->getPointCount();
+                switch (paramQueue->getParameterId()) {
+                    case kNoteCountId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
+                            note_count = 128 * value;
+                        break;
+                    case kSyncId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            sync = static_cast<int>(value) == 1;
+                            if (sync)
+                                set_beat();
+                            else
+                                set_time_window(time_window_param);
+                        }
+                        break;
+                    case kTimeWindowId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            time_window_param = 1000 * value;
+                            if (!sync) {
+                                set_time_window(time_window_param);
+                            }
+                        }
+                        break;
+                    case kBeatNumeratorId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            beat_numerator = 16 * value;
+                            set_beat();
+                        }
+                        break;
+                    case kBeatDenominatorId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            beat_denominator = 16 * value;
+                            set_beat();
+                        }
+                        break;
+                    case kCombineNotesId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            combine_notes = static_cast<int>(value) == 1;
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    if (data.processContext->tempo != tempo) {
+        tempo = data.processContext->tempo;
+        set_beat();
+    }
 }
 
 int Eris::time_window_to_block_size() {
@@ -311,8 +273,8 @@ int Eris::time_window_to_block_size() {
 }
 
 void Eris::clear_buffers() {
-    sample_buffer = std::vector<std::vector<double>>();
-    spill_samples = 0;
+    buffer_32.clear();
+    buffer_64.clear();
 }
 
 void Eris::set_time_window(const int32 time_window) {
@@ -325,24 +287,15 @@ void Eris::set_time_window(const int32 time_window) {
     }
 }
 
-std::vector<std::vector<a2m::Note>> Eris::convert(int channels) {
-    converter.set_samplerate(processSetup.sampleRate);
-    converter.set_block_size(block_size);
-    converter.set_note_count(note_count);
-    converter.set_transpose(transpose);
-
-    std::vector<std::vector<a2m::Note>> notes;
-
-    try {
-        for (size_t channel = 0; channel < channels; ++channel) {
-            notes.push_back(std::vector<a2m::Note>());
-            for (auto& note : converter.convert(sample_buffer[channel].data()))
-                notes[channel].push_back(note);
-        }
-    } catch (const std::runtime_error& e) {
+void Eris::set_beat() {
+    if (sync) {
+        beat_numerator = beat_numerator < 1 ? 1 : beat_numerator;
+        beat_denominator = beat_denominator < 1 ? 1 : beat_denominator;
+        double ratio = static_cast<double>(beat_numerator) / static_cast<double>(beat_denominator);
+        double second_per_beat = 60.0 / tempo;
+        double beat_per_ms = second_per_beat * 1000;
+        set_time_window(ratio * beat_per_ms);
     }
-
-    return notes;
 }
 
 tresult PLUGIN_API Eris::setState(IBStream* state) {
@@ -355,17 +308,41 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     if (streamer.readInt32(saved_note_count) == false)
         return kResultFalse;
 
-    int32 saved_transpose = 0;
-    if (streamer.readInt32(saved_transpose) == false)
+    bool saved_sync = 0;
+    if (streamer.readBool(saved_sync) == false)
         return kResultFalse;
 
-    set_time_window(saved_time_window);
-    note_count = saved_note_count;
-    transpose = saved_transpose;
+    int32 saved_beat_numerator = 0;
+    if (streamer.readInt32(saved_beat_numerator) == false)
+        return kResultFalse;
 
-    setParamNormalized(kTimeWindowId, time_window);
-    setParamNormalized(kNoteCountId, note_count);
-    setParamNormalized(kTransposeId, transpose);
+    int32 saved_beat_denominator = 0;
+    if (streamer.readInt32(saved_beat_denominator) == false)
+        return kResultFalse;
+
+    bool saved_combine_notes = 0;
+    if (streamer.readBool(saved_combine_notes) == false)
+        return kResultFalse;
+
+    time_window_param = saved_time_window;
+    note_count = saved_note_count;
+    sync = saved_sync;
+    beat_numerator = saved_beat_numerator;
+    beat_denominator = saved_beat_denominator;
+    combine_notes = saved_combine_notes;
+
+    setParamNormalized(kTimeWindowId, time_window / 1000.0);
+    setParamNormalized(kNoteCountId, note_count / 127.0);
+    setParamNormalized(kSyncId, sync);
+    setParamNormalized(kBeatNumeratorId, beat_numerator / 16.0);
+    setParamNormalized(kBeatDenominatorId, beat_denominator / 16.0);
+    setParamNormalized(kCombineNotesId, combine_notes);
+
+    if (sync) {
+        set_beat();
+    } else {
+        set_time_window(time_window_param);
+    }
 
     return kResultOk;
 }
@@ -373,9 +350,12 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
 tresult PLUGIN_API Eris::getState(IBStream* state) {
     IBStreamer streamer(state, kLittleEndian);
 
-    streamer.writeInt32(time_window);
+    streamer.writeInt32(time_window_param);
     streamer.writeInt32(note_count);
-    streamer.writeInt32(transpose);
+    streamer.writeBool(sync);
+    streamer.writeInt32(beat_numerator);
+    streamer.writeInt32(beat_denominator);
+    streamer.writeBool(combine_notes);
 
     return kResultOk;
 }
@@ -386,23 +366,16 @@ tresult PLUGIN_API Eris::setupProcessing(ProcessSetup& newSetup) {
     return SingleComponentEffect::setupProcessing(newSetup);
 }
 
-tresult PLUGIN_API Eris::setBusArrangements(SpeakerArrangement* inputs,
-                                            int32 numIns,
-                                            SpeakerArrangement* outputs,
-                                            int32 numOuts) {
-    if (numIns == 1 && numOuts == 1) {
+tresult PLUGIN_API Eris::setBusArrangements(SpeakerArrangement* inputs, int32 numIns, SpeakerArrangement*, int32) {
+    if (numIns == 1) {
         // the host wants Mono => Mono (or 1 channel -> 1 channel)
-        if (SpeakerArr::getChannelCount(inputs[0]) == 1 && SpeakerArr::getChannelCount(outputs[0]) == 1) {
+        if (SpeakerArr::getChannelCount(inputs[0]) == 1) {
             auto* bus = FCast<AudioBus>(audioInputs.at(0));
             if (bus) {
                 // check if we are Mono => Mono, if not we need to recreate the busses
                 if (bus->getArrangement() != inputs[0]) {
                     bus->setArrangement(inputs[0]);
                     bus->setName(STR16("Mono In"));
-                    if (auto* busOut = FCast<AudioBus>(audioOutputs.at(0))) {
-                        busOut->setArrangement(inputs[0]);
-                        busOut->setName(STR16("Mono Out"));
-                    }
                 }
                 return kResultOk;
             }
@@ -414,23 +387,15 @@ tresult PLUGIN_API Eris::setBusArrangements(SpeakerArrangement* inputs,
                 tresult result = kResultFalse;
 
                 // the host wants 2->2 (could be LsRs -> LsRs)
-                if (SpeakerArr::getChannelCount(inputs[0]) == 2 && SpeakerArr::getChannelCount(outputs[0]) == 2) {
+                if (SpeakerArr::getChannelCount(inputs[0]) == 2) {
                     bus->setArrangement(inputs[0]);
                     bus->setName(STR16("Stereo In"));
-                    if (auto* busOut = FCast<AudioBus>(audioOutputs.at(0))) {
-                        busOut->setArrangement(outputs[0]);
-                        busOut->setName(STR16("Stereo Out"));
-                    }
                     result = kResultTrue;
                 }
                 // the host want something different than 1->1 or 2->2 : in this case we want stereo
                 else if (bus->getArrangement() != SpeakerArr::kStereo) {
                     bus->setArrangement(SpeakerArr::kStereo);
                     bus->setName(STR16("Stereo In"));
-                    if (auto* busOut = FCast<AudioBus>(audioOutputs.at(0))) {
-                        busOut->setArrangement(SpeakerArr::kStereo);
-                        busOut->setName(STR16("Stereo Out"));
-                    }
 
                     result = kResultFalse;
                 }
