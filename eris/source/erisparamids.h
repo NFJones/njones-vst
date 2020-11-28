@@ -45,4 +45,7 @@ enum {
     kBeatNumeratorId,
     kBeatDenominatorId,
     kCombineNotesId,
+	kThresholdId,
+    kTransposeId,
+    kCeilingId,
 };

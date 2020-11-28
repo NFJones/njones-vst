@@ -1,20 +1,18 @@
 #include "eris.h"
 #include "erisparamids.h"
 #include "erisuimessagecontroller.h"
-#include "version.h"  // for versioning
-
-#include "public.sdk/source/main/pluginfactory.h"
-#include "public.sdk/source/vst/vstaudioprocessoralgo.h"
+#include "version.h"
 
 #include "base/source/fstreamer.h"
 #include "pluginterfaces/base/ibstream.h"
-#include "pluginterfaces/base/ustring.h"  // for UString128
+#include "pluginterfaces/base/ustring.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
-#include "pluginterfaces/vst/vstpresetkeys.h"  // for use of IStreamAttributes
-
+#include "pluginterfaces/vst/vstpresetkeys.h"
 #include "public.sdk/source/main/dllmain.cpp"
+#include "public.sdk/source/main/pluginfactory.h"
+#include "public.sdk/source/vst/vstaudioprocessoralgo.h"
 #include "vstgui/plugin-bindings/vst3editor.h"
 
 #include <fmt/format.h>
@@ -24,7 +22,6 @@
 #include <iostream>
 #include <map>
 
-// this allows to enable the communication example between eris and its controller
 #define ERIS_TEST 1
 
 using namespace VSTGUI;
@@ -37,49 +34,10 @@ static void log(const std::string& msg) {
 namespace Steinberg {
 namespace Vst {
 
-class TimeWindowParameter : public Parameter {
-   public:
-    TimeWindowParameter(int32 flags, int32 id);
-
-    void toString(ParamValue normValue, String128 string) const SMTG_OVERRIDE;
-    bool fromString(const TChar* string, ParamValue& normValue) const SMTG_OVERRIDE;
-};
-
-TimeWindowParameter::TimeWindowParameter(int32 flags, int32 id) {
-    Steinberg::UString(info.title, USTRINGSIZE(info.title)).assign(USTRING("Time Window"));
-    Steinberg::UString(info.units, USTRINGSIZE(info.units)).assign(USTRING("ms"));
-
-    info.flags = flags;
-    info.id = id;
-    info.stepCount = 0;
-    info.defaultNormalizedValue = 5 / 1000.0;
-    info.unitId = kRootUnitId;
-
-    setNormalized(info.defaultNormalizedValue);
-}
-
-void TimeWindowParameter::toString(ParamValue normValue, String128 string) const {
-    char text[32];
-    int val = static_cast<int>(normValue * 1000);
-    val = (val > 5) ? val : 5;
-    sprintf(text, "%d", val);
-
-    Steinberg::UString(string, 128).fromAscii(text);
-}
-
-bool TimeWindowParameter::fromString(const TChar* string, ParamValue& normValue) const {
-    Steinberg::UString wrapper((TChar*)string, -1);  // don't know buffer size here!
-    int64 tmp = 0;
-    if (wrapper.scanInt(tmp)) {
-        normValue = tmp / 1000.0;
-        return true;
-    }
-    return false;
-}
-
 Eris::Eris()
     : time_window(5),
       time_window_param(5),
+      threshold(0),
       block_size(0),
       note_count(0),
       sync(false),
@@ -87,7 +45,8 @@ Eris::Eris()
       beat_denominator(4),
       combine_notes(false),
       currentProcessMode(-1),
-      converter(processSetup.sampleRate, 0) {
+      converter(processSetup.sampleRate, 0),
+      transpose(0) {
     clear_buffers();
     set_time_window(time_window_param);
     for (int32 channel = 0; channel < 2; ++channel)
@@ -95,50 +54,34 @@ Eris::Eris()
             note_state[channel] = std::map<unsigned int, bool>();
 }
 
-tresult PLUGIN_API Eris::initialize(FUnknown* context) {
-    tresult result = SingleComponentEffect::initialize(context);
-    if (result != kResultOk)
-        return result;
-
-    addAudioInput(STR16("Stereo In"), SpeakerArr::kStereo);
-    addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
-    addEventOutput(STR16("Event Out"), 2);
-
-    auto* time_window_param = new RangeParameter(STR16("Time Window"), kTimeWindowId, nullptr, 5.0, 1000.0, 5.0, 995);
-    parameters.addParameter(time_window_param);
-
-    auto* note_count_param = new RangeParameter(STR16("Note Count"), kNoteCountId, nullptr, 0.0, 127.0, 0.0, 127);
-    parameters.addParameter(note_count_param);
-
-    auto* sync_param = new RangeParameter(STR16("Sync"), kSyncId, nullptr, 0.0, 1.0, 0.0, 1);
-    parameters.addParameter(sync_param);
-
-    auto* beat_numerator_param =
-        new RangeParameter(STR16("Beat Numerator"), kBeatNumeratorId, nullptr, 1.0, 16.0, 1.0, 15);
-    parameters.addParameter(beat_numerator_param);
-
-    auto* beat_denominator_param =
-        new RangeParameter(STR16("Beat Denominator"), kBeatDenominatorId, nullptr, 1.0, 16.0, 1.0, 15);
-    parameters.addParameter(beat_denominator_param);
-
-    auto* combine_notes_param = new RangeParameter(STR16("Combine Notes"), kCombineNotesId, nullptr, 0.0, 1.0, 0.0, 1);
-    parameters.addParameter(combine_notes_param);
-
-    return result;
+int Eris::time_window_to_block_size() {
+    return static_cast<int>((processSetup.sampleRate / 1000.0) * time_window);
 }
 
-tresult PLUGIN_API Eris::terminate() {
-    return SingleComponentEffect::terminate();
+void Eris::clear_buffers() {
+    buffer_32.clear();
+    buffer_64.clear();
 }
 
-tresult PLUGIN_API Eris::setActive(TBool state) {
-#if ERIS_TEST
-    if (state)
-        fprintf(stderr, "[Eris] Activated \n");
-    else
-        fprintf(stderr, "[Eris] Deactivated \n");
-#endif
-    return kResultOk;
+void Eris::set_time_window(const int32 time_window) {
+    this->time_window = time_window >= 5 ? time_window : 5;
+    int old_block_size = block_size;
+    block_size = time_window_to_block_size();
+
+    if (old_block_size != block_size) {
+        clear_buffers();
+    }
+}
+
+void Eris::set_beat() {
+    if (sync) {
+        beat_numerator = beat_numerator < 1 ? 1 : beat_numerator;
+        beat_denominator = beat_denominator < 1 ? 1 : beat_denominator;
+        double ratio = static_cast<double>(beat_numerator) / static_cast<double>(beat_denominator);
+        double second_per_beat = 60.0 / tempo;
+        double beat_per_ms = second_per_beat * 1000;
+        set_time_window(ratio * beat_per_ms);
+    }
 }
 
 void Eris::terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes) {
@@ -178,6 +121,9 @@ void Eris::convert(ProcessData& data) {
     converter.set_samplerate(processSetup.sampleRate);
     converter.set_block_size(block_size);
     converter.set_note_count(note_count);
+    converter.set_activation_level(threshold / 127.0);
+    converter.set_transpose(transpose);
+    converter.set_ceiling(ceiling / 127.0);
     std::function<void(const int, double*, const int)> processor = [&](const int channel, double* samples,
                                                                        const int event_offset) -> void {
         auto notes = converter.convert(samples);
@@ -206,6 +152,47 @@ tresult PLUGIN_API Eris::process(ProcessData& data) {
     }
 
     return kResultOk;
+}
+
+tresult PLUGIN_API Eris::initialize(FUnknown* context) {
+    tresult result = SingleComponentEffect::initialize(context);
+    if (result != kResultOk)
+        return result;
+
+    addAudioInput(STR16("Stereo In"), SpeakerArr::kStereo);
+    addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
+    addEventOutput(STR16("Event Out"), 2);
+
+    auto* time_window_param = new RangeParameter(STR16("Time Window"), kTimeWindowId, nullptr, 5.0, 1000.0, 5.0, 995);
+    parameters.addParameter(time_window_param);
+
+    auto* threshold_param = new RangeParameter(STR16("Threshold"), kThresholdId, nullptr, 0.0, 127.0, 0.0, 127);
+    parameters.addParameter(threshold_param);
+
+    auto* ceiling_param = new RangeParameter(STR16("Normalize"), kCeilingId, nullptr, 0.0, 127.0, 127.0, 127);
+    parameters.addParameter(ceiling_param);
+
+    auto* note_count_param = new RangeParameter(STR16("Note Count"), kNoteCountId, nullptr, 0.0, 127.0, 0.0, 127);
+    parameters.addParameter(note_count_param);
+
+    auto* sync_param = new RangeParameter(STR16("Sync"), kSyncId, nullptr, 0.0, 1.0, 0.0, 1);
+    parameters.addParameter(sync_param);
+
+    auto* beat_numerator_param =
+        new RangeParameter(STR16("Beat Numerator"), kBeatNumeratorId, nullptr, 1.0, 16.0, 1.0, 15);
+    parameters.addParameter(beat_numerator_param);
+
+    auto* beat_denominator_param =
+        new RangeParameter(STR16("Beat Denominator"), kBeatDenominatorId, nullptr, 1.0, 16.0, 1.0, 15);
+    parameters.addParameter(beat_denominator_param);
+
+    auto* combine_notes_param = new RangeParameter(STR16("Combine Notes"), kCombineNotesId, nullptr, 0.0, 1.0, 0.0, 1);
+    parameters.addParameter(combine_notes_param);
+
+    auto* transpose_param = new RangeParameter(STR16("Transpose"), kTransposeId, nullptr, -127.0, 127.0, 0.0, 255);
+    parameters.addParameter(transpose_param);
+
+    return result;
 }
 
 void Eris::process_parameters(ProcessData& data) {
@@ -240,6 +227,14 @@ void Eris::process_parameters(ProcessData& data) {
                             }
                         }
                         break;
+                    case kThresholdId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
+                            threshold = 127 * value;
+                        break;
+                    case kCeilingId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
+                            ceiling = 127 * value;
+                        break;
                     case kBeatNumeratorId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             beat_numerator = 16 * value;
@@ -253,9 +248,12 @@ void Eris::process_parameters(ProcessData& data) {
                         }
                         break;
                     case kCombineNotesId:
-                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
                             combine_notes = static_cast<int>(value) == 1;
-                        }
+                        break;
+                    case kTransposeId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
+                            transpose = 255 * value - 127;
                         break;
                 }
             }
@@ -265,36 +263,6 @@ void Eris::process_parameters(ProcessData& data) {
     if (data.processContext->tempo != tempo) {
         tempo = data.processContext->tempo;
         set_beat();
-    }
-}
-
-int Eris::time_window_to_block_size() {
-    return static_cast<int>((processSetup.sampleRate / 1000.0) * time_window);
-}
-
-void Eris::clear_buffers() {
-    buffer_32.clear();
-    buffer_64.clear();
-}
-
-void Eris::set_time_window(const int32 time_window) {
-    this->time_window = time_window >= 5 ? time_window : 5;
-    int old_block_size = block_size;
-    block_size = time_window_to_block_size();
-
-    if (old_block_size != block_size) {
-        clear_buffers();
-    }
-}
-
-void Eris::set_beat() {
-    if (sync) {
-        beat_numerator = beat_numerator < 1 ? 1 : beat_numerator;
-        beat_denominator = beat_denominator < 1 ? 1 : beat_denominator;
-        double ratio = static_cast<double>(beat_numerator) / static_cast<double>(beat_denominator);
-        double second_per_beat = 60.0 / tempo;
-        double beat_per_ms = second_per_beat * 1000;
-        set_time_window(ratio * beat_per_ms);
     }
 }
 
@@ -323,6 +291,15 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     bool saved_combine_notes = 0;
     if (streamer.readBool(saved_combine_notes) == false)
         return kResultFalse;
+    int32 saved_threshold = 0;
+    if (streamer.readInt32(saved_threshold) == false)
+        return kResultFalse;
+    int32 saved_transpose = 0;
+    if (streamer.readInt32(saved_transpose) == false)
+        return kResultFalse;
+    int32 saved_ceiling = 0;
+    if (streamer.readInt32(saved_ceiling) == false)
+        return kResultFalse;
 
     time_window_param = saved_time_window;
     note_count = saved_note_count;
@@ -330,6 +307,8 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     beat_numerator = saved_beat_numerator;
     beat_denominator = saved_beat_denominator;
     combine_notes = saved_combine_notes;
+    transpose = saved_transpose;
+    ceiling = saved_ceiling;
 
     setParamNormalized(kTimeWindowId, time_window / 1000.0);
     setParamNormalized(kNoteCountId, note_count / 127.0);
@@ -337,12 +316,14 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     setParamNormalized(kBeatNumeratorId, beat_numerator / 16.0);
     setParamNormalized(kBeatDenominatorId, beat_denominator / 16.0);
     setParamNormalized(kCombineNotesId, combine_notes);
+    setParamNormalized(kThresholdId, threshold / 127.0);
+    setParamNormalized(kTransposeId, (transpose + 127) / 255.0);
+    setParamNormalized(kCeilingId, ceiling / 127.0);
 
-    if (sync) {
+    if (sync)
         set_beat();
-    } else {
+    else
         set_time_window(time_window_param);
-    }
 
     return kResultOk;
 }
@@ -356,7 +337,24 @@ tresult PLUGIN_API Eris::getState(IBStream* state) {
     streamer.writeInt32(beat_numerator);
     streamer.writeInt32(beat_denominator);
     streamer.writeBool(combine_notes);
+    streamer.writeInt32(threshold);
+    streamer.writeInt32(transpose);
+    streamer.writeInt32(ceiling);
 
+    return kResultOk;
+}
+
+tresult PLUGIN_API Eris::terminate() {
+    return SingleComponentEffect::terminate();
+}
+
+tresult PLUGIN_API Eris::setActive(TBool state) {
+#if ERIS_TEST
+    if (state)
+        fprintf(stderr, "[Eris] Activated \n");
+    else
+        fprintf(stderr, "[Eris] Deactivated \n");
+#endif
     return kResultOk;
 }
 

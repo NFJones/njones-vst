@@ -1,44 +1,6 @@
-//------------------------------------------------------------------------
-// Project     : VST SDK
-//
-// Category    : Examples
-// Filename    : public.sdk/samples/vst/eris/source/eris.h
-// Created by  : Steinberg, 04/2005
-// Description : Eris Example for VST SDK 3.0
-//
-//-----------------------------------------------------------------------------
-// LICENSE
-// (c) 2020, Steinberg Media Technologies GmbH, All Rights Reserved
-//-----------------------------------------------------------------------------
-// Redistribution and use in source and binary forms, with or without modification,
-// are permitted provided that the following conditions are met:
-//
-//   * Redistributions of source code must retain the above copyright notice,
-//     this list of conditions and the following disclaimer.
-//   * Redistributions in binary form must reproduce the above copyright notice,
-//     this list of conditions and the following disclaimer in the documentation
-//     and/or other materials provided with the distribution.
-//   * Neither the name of the Steinberg Media Technologies nor the names of its
-//     contributors may be used to endorse or promote products derived from this
-//     software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-// IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
-// INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-// BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
-// OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
-// OF THE POSSIBILITY OF SUCH DAMAGE.
-//-----------------------------------------------------------------------------
-
 #pragma once
 
-// must always come first
 #include "public.sdk/source/vst/vstsinglecomponenteffect.h"
-//------------------------------------------------------------------------
 
 #include "pluginterfaces/vst/ivstcontextmenu.h"
 #include "pluginterfaces/vst/ivstplugview.h"
@@ -58,9 +20,6 @@ namespace Vst {
 template <typename T>
 class ErisUIMessageController;
 
-//------------------------------------------------------------------------
-// Eris as combined processor and controller
-//------------------------------------------------------------------------
 class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, public IMidiMapping {
    public:
     //------------------------------------------------------------------------
@@ -74,7 +33,6 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
 
     static FUnknown* createInstance(void* /*context*/) { return (IAudioProcessor*)new Eris; }
 
-    //---from IComponent-----------------------
     tresult PLUGIN_API initialize(FUnknown* context) SMTG_OVERRIDE;
     tresult PLUGIN_API terminate() SMTG_OVERRIDE;
     tresult PLUGIN_API setActive(TBool state) SMTG_OVERRIDE;
@@ -88,7 +46,6 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
                                           SpeakerArrangement* outputs,
                                           int32 numOuts) SMTG_OVERRIDE;
 
-    //---from IEditController-------
     IPlugView* PLUGIN_API createView(const char* name) SMTG_OVERRIDE;
     tresult PLUGIN_API setEditorState(IBStream* state) SMTG_OVERRIDE;
     tresult PLUGIN_API getEditorState(IBStream* state) SMTG_OVERRIDE;
@@ -96,47 +53,44 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     tresult PLUGIN_API getParamStringByValue(ParamID tag, ParamValue valueNormalized, String128 string) SMTG_OVERRIDE;
     tresult PLUGIN_API getParamValueByString(ParamID tag, TChar* string, ParamValue& valueNormalized) SMTG_OVERRIDE;
 
-    //---from IMidiMapping-----------------
     tresult PLUGIN_API getMidiControllerAssignment(int32 busIndex,
                                                    int16 channel,
                                                    CtrlNumber midiControllerNumber,
                                                    ParamID& tag) SMTG_OVERRIDE;
 
-    //---from VST3EditorDelegate-----------
     IController* createSubController(UTF8StringPtr name,
                                      const IUIDescription* description,
                                      VST3Editor* editor) SMTG_OVERRIDE;
 
-    //---Interface---------
     OBJ_METHODS(Eris, SingleComponentEffect)
     tresult PLUGIN_API queryInterface(const TUID iid, void** obj) SMTG_OVERRIDE;
     REFCOUNT_METHODS(SingleComponentEffect)
 
-    //---Internal functions-------
     void addUIMessageController(UIMessageController* controller);
     void removeUIMessageController(UIMessageController* controller);
     void setDefaultMessageText(String128 text);
     TChar* getDefaultMessageText();
 
-    //------------------------------------------------------------------------
    private:
-    // our model values
     int32 time_window_param;
     int32 note_count;
     bool sync;
     int beat_numerator;
     int beat_denominator;
     bool combine_notes;
+    int transpose;
 
     std::map<int, std::map<unsigned int, bool>> note_state;
-    njones::BlockProcessor<Sample32> buffer_32;
-    njones::BlockProcessor<Sample64> buffer_64;
+    njones::audio::BlockProcessor<Sample32> buffer_32;
+    njones::audio::BlockProcessor<Sample64> buffer_64;
 
     int32 time_window;
+    int32 threshold;
     int32 block_size;
     int event_offset;
     int buffer_index;
     float tempo;
+    int32 ceiling;
 
     int32 currentProcessMode;
 
@@ -148,15 +102,13 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     String128 defaultMessageText;
 
     int time_window_to_block_size();
+    void process_parameters(ProcessData& data);
     void set_time_window(const int32 time_window);
     void set_beat();
     void clear_buffers();
-    void process_parameters(ProcessData& data);
-    void convert(ProcessData& data);
     void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes);
     void initiate_notes(const int channel, const std::vector<a2m::Note>& notes, int offset, ProcessData& data);
+    void convert(ProcessData& data);
 };
-
-//------------------------------------------------------------------------
 }  // namespace Vst
 }  // namespace Steinberg

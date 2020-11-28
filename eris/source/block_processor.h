@@ -3,12 +3,13 @@
 #include <vector>
 
 namespace njones {
-template <class SampleType>
+namespace audio {
+template <class SampleType, class ConversionType = double>
 class BlockProcessor {
    public:
     BlockProcessor(
-        std::function<void(const int, double*, const int)> processor =
-            [](const int, double*, const int) -> void {},
+        std::function<void(const int, ConversionType*, const int)> processor =
+            [](const int, ConversionType*, const int) -> void {},
         int nchannels = 0,
         int block_size = 0)
         : processor(processor), index(0) {
@@ -44,14 +45,14 @@ class BlockProcessor {
     void resize(const int nchannels, const int block_size) {
         if (nchannels != this->nchannels) {
             this->nchannels = nchannels;
-            buffer = std::vector<std::vector<double>>(nchannels);
+            buffer = std::vector<std::vector<ConversionType>>(nchannels);
             this->block_size = 0;
             index = 0;
         }
         if (this->block_size != block_size) {
             this->block_size = block_size;
             for (int i = 0; i < nchannels; ++i)
-                buffer.at(i) = std::vector<double>(block_size);
+                buffer.at(i) = std::vector<ConversionType>(block_size);
             index = 0;
         }
     }
@@ -60,7 +61,7 @@ class BlockProcessor {
 
     void set_block_size(const int block_size) { resize(nchannels, block_size); }
 
-    void set_processor(std::function<void(const int, double*, const int)> processor) {
+    void set_processor(std::function<void(const int, ConversionType*, const int)> processor) {
         this->processor = processor;
     }
 
@@ -81,7 +82,8 @@ class BlockProcessor {
                 channel_remaining = remaining;
 
                 while (channel_remaining-- > 0) {
-                    buffer.at(channel).at(channel_index++) = static_cast<double>(samples[channel][channel_offset++]);
+                    buffer.at(channel).at(channel_index++) =
+                        static_cast<ConversionType>(samples[channel][channel_offset++]);
 
                     if (channel_index == block_size) {
                         processor(channel, buffer.at(channel).data(), channel_offset);
@@ -96,16 +98,15 @@ class BlockProcessor {
         }
     }
 
-    void clear() {
-        index = 0;
-    }
+    void clear() { index = 0; }
 
    protected:
-    std::function<void(const int, double*, const int)> processor;
+    std::function<void(const int, ConversionType*, const int)> processor;
     int nchannels;
     int block_size;
     int index;
 
-    std::vector<std::vector<double>> buffer;
+    std::vector<std::vector<ConversionType>> buffer;
 };
+}  // namespace audio
 }  // namespace njones
