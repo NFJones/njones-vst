@@ -48,4 +48,8 @@ enum {
 	kThresholdId,
     kTransposeId,
     kCeilingId,
+    kPitchSetId,
+    kNoteMinId,
+    kNoteMaxId,
+    kMaxLengthId,
 };

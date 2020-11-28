@@ -13,6 +13,7 @@
 #include <mutex>
 
 #include "block_processor.h"
+#include "pitch_set.h"
 
 namespace Steinberg {
 namespace Vst {
@@ -80,17 +81,23 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     bool combine_notes;
     int transpose;
 
-    std::map<int, std::map<unsigned int, bool>> note_state;
+    std::map<int, std::map<unsigned int, std::pair<bool, uint32>>> note_state;
     njones::audio::BlockProcessor<Sample32> buffer_32;
     njones::audio::BlockProcessor<Sample64> buffer_64;
 
     int32 time_window;
     int32 threshold;
     int32 block_size;
+    uint32 note_min;
+    uint32 note_max;
+    uint32 max_length;
     int event_offset;
     int buffer_index;
     float tempo;
     int32 ceiling;
+    std::vector<unsigned int> pitch_set;
+    int32 pitch_set_index;
+    int sample_rate;
 
     int32 currentProcessMode;
 

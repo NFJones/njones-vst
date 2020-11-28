@@ -15,6 +15,8 @@ if(SMTG_ADD_VSTGUI)
         source/eris.h
         source/version.h
         source/erisuimessagecontroller.h
+        source/pitch_set.h
+        source/pitch_set.cpp
     )
 
     set(target eris)
