@@ -1,10 +1,11 @@
 
 #include <functional>
+#include <thread>
 #include <vector>
 
 namespace njones {
 namespace audio {
-template <class SampleType, class ConversionType = double>
+template <class SampleType, class ConversionType = double, const size_t Threads = 2>
 class BlockProcessor {
    public:
     BlockProcessor(
@@ -52,7 +53,7 @@ class BlockProcessor {
         if (this->block_size != block_size) {
             this->block_size = block_size;
             for (int i = 0; i < nchannels; ++i)
-                buffer.at(i) = std::vector<ConversionType>(block_size);
+                buffer[i] = std::vector<ConversionType>(block_size);
             index = 0;
         }
     }
@@ -69,6 +70,8 @@ class BlockProcessor {
     int get_block_size() const { return block_size; }
 
     void add(SampleType** samples, const int nsamples) {
+        static std::vector<std::thread> pool;
+
         int remaining = nsamples;
         int offset = 0;
         int channel_index;
@@ -82,16 +85,18 @@ class BlockProcessor {
                 channel_remaining = remaining;
 
                 while (channel_remaining-- > 0) {
-                    buffer.at(channel).at(channel_index++) =
-                        static_cast<ConversionType>(samples[channel][channel_offset++]);
+                    buffer[channel][channel_index++] = static_cast<ConversionType>(samples[channel][channel_offset++]);
 
                     if (channel_index == block_size) {
-                        processor(channel, buffer.at(channel).data(), channel_offset);
+                        pool.emplace_back(std::thread{processor, channel, buffer[channel].data(), channel_offset});
                         channel_index = 0;
                         break;
                     }
                 }
             }
+            for (auto& t : pool)
+                t.join();
+            pool.clear();
             remaining = channel_remaining;
             offset = channel_offset;
             index = channel_index;

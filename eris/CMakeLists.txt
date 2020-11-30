@@ -2,7 +2,7 @@
 include_directories("../a2m/src/")
 include_directories("${SDK_ROOT}")
 
-add_compile_definitions(FMT_HEADER_ONLY=1 VSTGUI_LIVE_EDITING=1)
+add_compile_definitions(FMT_HEADER_ONLY=1)
 
 if(SMTG_ADD_VSTGUI)
     set(eris_sources
@@ -17,21 +17,16 @@ if(SMTG_ADD_VSTGUI)
         source/erisuimessagecontroller.h
         source/pitch_set.h
         source/pitch_set.cpp
+        resource/eris.uidesc
     )
 
     set(target eris)
     smtg_add_vst3plugin(${target} ${eris_sources})
-    # set_target_properties(${target} PROPERTIES ${SDK_IDE_PLUGIN_EXAMPLES_FOLDER})
     target_link_libraries(${target} PRIVATE sdk vstgui_support a2m-static fftw3)
     add_dependencies(${target} a2m-static)
 
     smtg_add_vst3_resource(${target} "resource/eris.uidesc")
     smtg_add_vst3_resource(${target} "resource/background.png")
-    smtg_add_vst3_resource(${target} "resource/slider_background.png")
-    smtg_add_vst3_resource(${target} "resource/slider_handle.png")
-    smtg_add_vst3_resource(${target} "resource/slider_handle_2.0x.png")
-    smtg_add_vst3_resource(${target} "resource/vu_on.png")
-    smtg_add_vst3_resource(${target} "resource/vu_off.png")
 
     if(SMTG_MAC)
         smtg_set_bundle(${target} INFOPLIST "${CMAKE_CURRENT_LIST_DIR}/mac/Info.plist" PREPROCESS)

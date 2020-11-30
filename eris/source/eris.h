@@ -21,6 +21,12 @@ namespace Vst {
 template <typename T>
 class ErisUIMessageController;
 
+struct NoteState {
+    NoteState(const bool is_active = false, int32 count = 0);
+    bool is_active;
+    int32 count;
+};
+
 class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, public IMidiMapping {
    public:
     //------------------------------------------------------------------------
@@ -75,41 +81,38 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
    private:
     int32 time_window_param;
     int32 note_count;
-    bool sync;
-    int beat_numerator;
-    int beat_denominator;
-    bool combine_notes;
-    int transpose;
+    int32 sync;
+    int32 beat_numerator;
+    int32 beat_denominator;
+    int32 combine_notes;
+    int32 key;
+    int32 pitch_set_index;
+    int32 threshold;
+    int32 octave;
+    int32 note_min;
+    int32 note_max;
+    int32 max_length;
+    int32 ceiling;
 
-    std::map<int, std::map<unsigned int, std::pair<bool, uint32>>> note_state;
+    std::vector<unsigned int> pitch_set;
+    int32 time_window;
+    int32 block_size;
+    float tempo;
+    int32 sample_rate;
+
+    a2m::Converter converter;
+    std::vector<std::array<NoteState, 128>> note_state;
     njones::audio::BlockProcessor<Sample32> buffer_32;
     njones::audio::BlockProcessor<Sample64> buffer_64;
 
-    int32 time_window;
-    int32 threshold;
-    int32 block_size;
-    uint32 note_min;
-    uint32 note_max;
-    uint32 max_length;
-    int event_offset;
-    int buffer_index;
-    float tempo;
-    int32 ceiling;
-    std::vector<unsigned int> pitch_set;
-    int32 pitch_set_index;
-    int sample_rate;
-
     int32 currentProcessMode;
-
-    a2m::Converter converter;
-
     using UIMessageControllerList = std::vector<UIMessageController*>;
     UIMessageControllerList uiMessageControllers;
-
     String128 defaultMessageText;
 
     int time_window_to_block_size();
     void process_parameters(ProcessData& data);
+    void process_inputs(ProcessData& data);
     void set_time_window(const int32 time_window);
     void set_beat();
     void clear_buffers();

@@ -42,8 +42,8 @@
 #define MAJOR_VERSION_STR "1"
 #define MAJOR_VERSION_INT 1
 
-#define SUB_VERSION_STR "3"
-#define SUB_VERSION_INT 3
+#define SUB_VERSION_STR "0"
+#define SUB_VERSION_INT 0
 
 #define RELEASE_NUMBER_STR "0"
 #define RELEASE_NUMBER_INT 0
@@ -59,10 +59,10 @@
 
 #define stringOriginalFilename	"eris.vst3"
 #if SMTG_PLATFORM_64
-#define stringFileDescription	"Eris VST3-SDK (64Bit)"
+#define stringFileDescription	"Eris VST3 (64Bit)"
 #else
-#define stringFileDescription	"Eris VST3-SDK"
+#define stringFileDescription	"Eris VST3"
 #endif
-#define stringCompanyName		"Steinberg Media Technologies\0"
-#define stringLegalCopyright	"© 2020 Steinberg Media Technologies"
+#define stringCompanyName		"Damned Dog Music\0"
+#define stringLegalCopyright	"© 2020 Neil F Jones"
 #define stringLegalTrademarks	"VST is a trademark of Steinberg Media Technologies GmbH"

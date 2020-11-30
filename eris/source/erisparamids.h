@@ -46,10 +46,11 @@ enum {
     kBeatDenominatorId,
     kCombineNotesId,
 	kThresholdId,
-    kTransposeId,
     kCeilingId,
     kPitchSetId,
     kNoteMinId,
     kNoteMaxId,
     kMaxLengthId,
+    kKeyId,
+    kOctaveId
 };

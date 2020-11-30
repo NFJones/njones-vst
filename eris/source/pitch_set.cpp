@@ -18,3 +18,8 @@ const std::vector<std::pair<std::string, std::vector<unsigned int>>> njones::aud
     {"Fifths", {0, 7}},
     {"Fourths", {0, 5}},
 };
+
+extern const std::vector<std::pair<std::string, int>> njones::audio::KEY = {
+    {"C", 0},  {"C#", 1}, {"D", 2},  {"Eb", 3}, {"E", 4},   {"F", 5},
+    {"F#", 6}, {"G", 7},  {"G#", 8}, {"A", 9},  {"Bb", 10}, {"B", 11},
+};

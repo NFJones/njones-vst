@@ -22,14 +22,9 @@
 #include <iostream>
 #include <map>
 
-#define ERIS_TEST 1
+#define ERIS_TEST 0
 
 using namespace VSTGUI;
-
-static void log(const std::string& msg) {
-    std::ofstream outfile("C:/Users/neilf/Downloads/eris.log", std::ios_base::app);
-    outfile << msg << std::endl;
-}
 
 namespace Steinberg {
 namespace Vst {
@@ -40,23 +35,23 @@ Eris::Eris()
       threshold(0),
       block_size(0),
       note_count(0),
-      sync(false),
+      sync(0),
       beat_numerator(1),
       beat_denominator(4),
-      combine_notes(false),
+      combine_notes(0),
       currentProcessMode(-1),
       converter(processSetup.sampleRate, 0),
-      transpose(0),
       pitch_set_index(0),
       sample_rate(0),
       note_min(0),
       note_max(127),
-      max_length(0) {
+      max_length(0),
+      key(0),
+      octave(0) {
     clear_buffers();
     set_time_window(time_window_param);
     for (int32 channel = 0; channel < 2; ++channel)
-        if (note_state.find(channel) == note_state.end())
-            note_state[channel] = std::map<unsigned int, std::pair<bool, uint32>>();
+        note_state.push_back(std::array<NoteState, 128>());
 }
 
 int Eris::time_window_to_block_size() {
@@ -90,18 +85,21 @@ void Eris::set_beat() {
     }
 }
 
+NoteState::NoteState(const bool is_active, const int32 count) : is_active(is_active), count(count) {}
+
 void Eris::terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes) {
-    for (auto& state : note_state.at(channel)) {
-        if (state.second.first) {
-            if ((!combine_notes) || (combine_notes && ((find(new_notes.begin(), new_notes.end(),
-                                                             a2m::Note(state.first, 0)) == new_notes.end()) ||
-                                                       (state.second.second > max_length && max_length > 0)))) {
-                NoteOffEvent note_off{static_cast<int16>(channel), static_cast<int16>(state.first), 0.0f, -1, 0.0f};
+    for (unsigned int pitch = 0; pitch < note_state[channel].size(); ++pitch) {
+        auto& state = note_state[channel][pitch];
+        if (state.is_active) {
+            if ((!combine_notes) ||
+                (combine_notes && ((find(new_notes.begin(), new_notes.end(), a2m::Note(pitch, 0)) == new_notes.end()) ||
+                                   (state.count > max_length && max_length > 0)))) {
+                NoteOffEvent note_off{static_cast<int16>(channel), static_cast<int16>(pitch), 0.0f, -1, 0.0f};
                 Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOffEvent};
                 event.noteOff = note_off;
                 data.outputEvents->addEvent(event);
-                note_state.at(channel)[state.first].first = false;
-                note_state.at(channel)[state.first].second = 0;
+                state.is_active = false;
+                state.count = 0;
             }
         }
     }
@@ -115,14 +113,15 @@ void Eris::initiate_notes(const int channel, const std::vector<a2m::Note>& notes
                             static_cast<float>(note.velocity / 127.0),
                             0,
                             -1};
-        if ((!combine_notes) || (combine_notes && !note_state.at(channel)[note.pitch].first)) {
+        auto& state = note_state[channel][note.pitch];
+        if ((!combine_notes) || (combine_notes && !state.is_active)) {
             Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOnEvent};
             event.noteOn = note_on;
             data.outputEvents->addEvent(event);
-            note_state.at(channel)[note.pitch].first = true;
-            note_state.at(channel)[note.pitch].second = 1;
-        } else if (combine_notes && note_state.at(channel)[note.pitch].first)
-            note_state.at(channel)[note.pitch].second += 1;
+            state.is_active = true;
+            state.count = 1;
+        } else if (combine_notes && state.is_active)
+            state.count += 1;
     }
 }
 
@@ -155,6 +154,7 @@ void Eris::convert(ProcessData& data) {
 }
 
 tresult PLUGIN_API Eris::process(ProcessData& data) {
+    process_inputs(data);
     process_parameters(data);
     if (data.numInputs == 0 || data.numOutputs == 0)
         return kResultOk;
@@ -166,62 +166,89 @@ tresult PLUGIN_API Eris::process(ProcessData& data) {
     return kResultOk;
 }
 
-tresult PLUGIN_API Eris::initialize(FUnknown* context) {
-    tresult result = SingleComponentEffect::initialize(context);
-    if (result != kResultOk)
-        return result;
+void Eris::process_inputs(ProcessData& data) {
+    const int input_count = data.inputEvents->getEventCount();
 
-    addAudioInput(STR16("Stereo In"), SpeakerArr::kStereo);
-    addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
-    addEventOutput(STR16("Event Out"), 2);
+    if (input_count == 0)
+        return;
 
-    auto* time_window_param = new RangeParameter(STR16("Time Window"), kTimeWindowId, nullptr, 5.0, 1000.0, 5.0, 995);
-    parameters.addParameter(time_window_param);
+    int32 queue_index = 0;
+    int32 param_index = 0;
+    IParameterChanges* outParamChanges = data.outputParameterChanges;
+    auto set_parameter = [&](const int param_id, const double value) {
+        if (outParamChanges) {
+            IParamValueQueue* paramQueue = outParamChanges->addParameterData(param_id, queue_index);
+            if (paramQueue)
+                paramQueue->addPoint(0, value, param_index);
+        }
+        setParamNormalized(param_id, value);
+    };
+    std::vector<std::pair<std::pair<int, int>, std::function<void(const int)>>> input_processors = {
+        {{0, 20},
+         [&](const int pitch) {
+             // Octave
+             octave = pitch - 10;
+             converter.set_transpose(octave * 12 + key);
+             set_parameter(kOctaveId, (octave + 10) / 20.0);
+         }},
+        {{24, 24 + njones::audio::KEY.size() - 1},
+         [&](const int pitch) {
+             // Key
+             key = pitch - 24;
+             converter.set_transpose(octave * 12 + key);
+             set_parameter(kKeyId, static_cast<double>(key) / (njones::audio::KEY.size() - 1));
+         }},
+        {{24 + njones::audio::KEY.size(), 24 + njones::audio::KEY.size() + njones::audio::PITCH_SET.size() - 1},
+         [&](const int pitch) {
+             // Scale
+             pitch_set_index = static_cast<int32>(static_cast<unsigned int>(pitch) - (24 + njones::audio::KEY.size()));
+             pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
+             converter.set_pitch_set(pitch_set);
+             set_parameter(kPitchSetId, static_cast<double>(pitch_set_index) / (njones::audio::PITCH_SET.size() - 1));
+         }},
+        {{69, 101},
+         [&](const int pitch) {
+             // Max Combine Length
+             max_length = pitch - 69;
+             set_parameter(kMaxLengthId, max_length / 32.0);
+         }},
+        {{102, 118},
+         [&](const int pitch) {
+             // Beat Numerator
+             beat_numerator = pitch - 101;
+             set_parameter(kBeatNumeratorId, beat_numerator / 16.0);
+         }},
+        {{119, 125},
+         [&](const int pitch) {
+             // Beat Denominator
+             beat_denominator = pitch - 118;
+             set_parameter(kBeatDenominatorId, beat_denominator / 16.0);
+         }},
+        {{126, 126},
+         [&](const int pitch) {
+             // Beat Sync On/Off
+             sync = !sync;
+             set_parameter(kSyncId, sync);
+         }},
+        {{127, 127},
+         [&](const int pitch) {
+             // Combine Notes On/Off
+             combine_notes = !combine_notes;
+             set_parameter(kCombineNotesId, combine_notes);
+         }},
+    };
 
-    auto* threshold_param = new RangeParameter(STR16("Threshold"), kThresholdId, nullptr, 0.0, 127.0, 0.0, 127);
-    parameters.addParameter(threshold_param);
+    for (int input = 0; input < input_count; ++input) {
+        Event event;
+        data.inputEvents->getEvent(input, event);
 
-    auto* ceiling_param = new RangeParameter(STR16("Normalize"), kCeilingId, nullptr, 1.0, 127.0, 127.0, 126);
-    parameters.addParameter(ceiling_param);
-
-    auto* note_count_param = new RangeParameter(STR16("Note Count"), kNoteCountId, nullptr, 0.0, 127.0, 0.0, 127);
-    parameters.addParameter(note_count_param);
-
-    auto* note_min_param = new RangeParameter(STR16("Note Min"), kNoteMinId, nullptr, 0.0, 127.0, 0.0, 127);
-    parameters.addParameter(note_min_param);
-
-    auto* note_max_param = new RangeParameter(STR16("Note Max"), kNoteMaxId, nullptr, 0.0, 127.0, 127.0, 127);
-    parameters.addParameter(note_max_param);
-
-    auto* sync_param = new RangeParameter(STR16("Sync"), kSyncId, nullptr, 0.0, 1.0, 0.0, 1);
-    parameters.addParameter(sync_param);
-
-    auto* beat_numerator_param =
-        new RangeParameter(STR16("Beat Numerator"), kBeatNumeratorId, nullptr, 1.0, 16.0, 1.0, 15);
-    parameters.addParameter(beat_numerator_param);
-
-    auto* beat_denominator_param =
-        new RangeParameter(STR16("Beat Denominator"), kBeatDenominatorId, nullptr, 1.0, 16.0, 1.0, 15);
-    parameters.addParameter(beat_denominator_param);
-
-    auto* combine_notes_param = new RangeParameter(STR16("Combine Notes"), kCombineNotesId, nullptr, 0.0, 1.0, 0.0, 1);
-    parameters.addParameter(combine_notes_param);
-
-    auto* max_length_param = new RangeParameter(STR16("Max Length"), kMaxLengthId, nullptr, 0.0, 32, 0.0, 32);
-    parameters.addParameter(max_length_param);
-
-    auto* transpose_param = new RangeParameter(STR16("Transpose"), kTransposeId, nullptr, -127.0, 127.0, 0.0, 255);
-    parameters.addParameter(transpose_param);
-
-    auto* pitch_set_param = new StringListParameter(STR16("Scale"), kPitchSetId);
-    for (const auto& set : njones::audio::PITCH_SET) {
-        String128 str;
-        str8ToStr16(str, set.first.c_str(), static_cast<int32>(set.first.length()));
-        pitch_set_param->appendString(str);
+        if (event.type == Event::kNoteOnEvent) {
+            NoteOnEvent note_on = event.noteOn;
+            for (const auto& processor : input_processors)
+                if (note_on.pitch >= processor.first.first && note_on.pitch <= processor.first.second)
+                    processor.second(note_on.pitch);
+        }
     }
-    parameters.addParameter(pitch_set_param);
-
-    return result;
 }
 
 void Eris::process_parameters(ProcessData& data) {
@@ -286,10 +313,16 @@ void Eris::process_parameters(ProcessData& data) {
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue)
                             combine_notes = static_cast<int>(value) == 1;
                         break;
-                    case kTransposeId:
+                    case kKeyId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
-                            transpose = 255 * value - 127;
-                            converter.set_transpose(transpose);
+                            key = value * (njones::audio::KEY.size() - 1);
+                            converter.set_transpose(octave * 12 + key);
+                        }
+                        break;
+                    case kOctaveId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            octave = value * 20 - 10;
+                            converter.set_transpose(octave * 12 + key);
                         }
                         break;
                     case kPitchSetId:
@@ -302,12 +335,15 @@ void Eris::process_parameters(ProcessData& data) {
                     case kNoteMinId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             note_min = 127 * value;
-                            converter.set_pitch_range(std::array<unsigned int, 2>{note_min, note_max});
+                            converter.set_pitch_range(std::array<unsigned int, 2>{static_cast<unsigned int>(note_min),
+                                                                                  static_cast<unsigned int>(note_max)});
                         }
+                        break;
                     case kNoteMaxId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             note_max = 127 * value;
-                            converter.set_pitch_range(std::array<unsigned int, 2>{note_min, note_max});
+                            converter.set_pitch_range(std::array<unsigned int, 2>{static_cast<unsigned int>(note_min),
+                                                                                  static_cast<unsigned int>(note_max)});
                         }
                         break;
                     case kMaxLengthId:
@@ -326,92 +362,115 @@ void Eris::process_parameters(ProcessData& data) {
     }
 }
 
+tresult PLUGIN_API Eris::initialize(FUnknown* context) {
+    tresult result = SingleComponentEffect::initialize(context);
+    if (result != kResultOk)
+        return result;
+
+    addAudioInput(STR16("Stereo In"), SpeakerArr::kStereo);
+    addAudioOutput(STR16("Stereo Out"), SpeakerArr::kStereo);
+    addEventInput(STR16("Event In"), 1);
+    addEventOutput(STR16("Event Out"), 2);
+
+    auto add_range_param = [&](const char* name, const int tag, const double min, const double max,
+                               const double default, const int steps) {
+        String name_str = name;
+        auto* new_param = new RangeParameter(name_str, tag, nullptr, min, max, default, steps);
+        parameters.addParameter(new_param);
+    };
+
+    auto add_list_param = [&](const char* name, const int tag, const auto& arr) {
+        String name_str = name;
+        auto* new_param = new StringListParameter(name_str, tag);
+        for (const auto& name : arr) {
+            String128 str;
+            str8ToStr16(str, name.first.c_str(), static_cast<int32>(name.first.length()));
+            new_param->appendString(str);
+        }
+        parameters.addParameter(new_param);
+    };
+
+    add_range_param("Window", kTimeWindowId, 5.0, 1000.0, 5.0, 995);
+    add_range_param("Threshold", kThresholdId, 0.0, 127.0, 0.0, 127);
+    add_range_param("Normalize", kCeilingId, 1.0, 127.0, 127.0, 126);
+    add_range_param("Count", kNoteCountId, 0.0, 127.0, 0.0, 127);
+    add_range_param("Min", kNoteMinId, 0.0, 127.0, 0.0, 127);
+    add_range_param("Max", kNoteMaxId, 0.0, 127.0, 127.0, 127);
+    add_range_param("Beat Sync", kSyncId, 0.0, 1.0, 0.0, 1);
+    add_range_param("Multiplier", kBeatNumeratorId, 1.0, 16.0, 1.0, 15);
+    add_range_param("Divider", kBeatDenominatorId, 1.0, 16.0, 1.0, 15);
+    add_range_param("Combine", kCombineNotesId, 0.0, 1.0, 0.0, 1);
+    add_range_param("Length", kMaxLengthId, 0.0, 32, 0.0, 32);
+    add_list_param("Key", kKeyId, njones::audio::KEY);
+    add_range_param("Octave", kOctaveId, -10.0, 10.0, 0.0, 20);
+    add_list_param("Scale", kPitchSetId, njones::audio::PITCH_SET);
+
+    return result;
+}
+
 tresult PLUGIN_API Eris::setState(IBStream* state) {
     IBStreamer streamer(state, kLittleEndian);
-    int32 saved_time_window = 5;
-    if (streamer.readInt32(saved_time_window) == false)
-        return kResultFalse;
+    auto read_param = [&](
+                          auto& var, std::function<void(void)> post_process = []() {}) {
+        auto saved_var = var;
+        if (streamer.readInt32(saved_var) == false)
+            throw std::runtime_error("Failed to read parameter.");
+        var = saved_var;
+        post_process();
+    };
+    auto int32_reader = [&](int32& var) -> bool { return streamer.readInt32(var); };
 
-    int32 saved_note_count = 0;
-    if (streamer.readInt32(saved_note_count) == false)
+    try {
+        read_param(time_window, [&]() { setParamNormalized(kTimeWindowId, time_window / 1000.0); });
+        read_param(note_count, [&]() {
+            converter.set_note_count(note_count);
+            setParamNormalized(kNoteCountId, note_count / 127.0);
+        });
+        read_param(sync, [&]() {
+            if (sync)
+                set_beat();
+            else
+                set_time_window(time_window_param);
+            setParamNormalized(kSyncId, sync);
+        });
+        read_param(beat_numerator, [&]() { setParamNormalized(kBeatNumeratorId, beat_numerator / 16.0); });
+        read_param(beat_denominator, [&]() { setParamNormalized(kBeatDenominatorId, beat_denominator / 16.0); });
+        read_param(combine_notes, [&]() { setParamNormalized(kCombineNotesId, combine_notes); });
+        read_param(threshold, [&]() {
+            converter.set_activation_level(threshold / 127.0);
+            setParamNormalized(kThresholdId, threshold / 127.0);
+        });
+        read_param(key, [&]() {
+            converter.set_transpose(octave * 12 + key);
+            setParamNormalized(kKeyId, static_cast<double>(key) / njones::audio::KEY.size());
+        });
+        read_param(octave, [&]() {
+            converter.set_transpose(octave * 12 + key);
+            setParamNormalized(kOctaveId, (octave + 10) / 20.0);
+        });
+        read_param(ceiling, [&]() {
+            converter.set_ceiling(ceiling / 127.0);
+            setParamNormalized(kCeilingId, ceiling / 127.0);
+        });
+        read_param(pitch_set_index, [&]() {
+            pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
+            converter.set_pitch_set(pitch_set);
+            setParamNormalized(kPitchSetId, static_cast<double>(pitch_set_index) / njones::audio::PITCH_SET.size());
+        });
+        read_param(note_min, [&]() {
+            converter.set_pitch_range(
+                std::array<unsigned int, 2>{static_cast<unsigned int>(note_min), static_cast<unsigned int>(note_max)});
+            setParamNormalized(kNoteMinId, note_min / 127.0);
+        });
+        read_param(note_max, [&]() {
+            converter.set_pitch_range(
+                std::array<unsigned int, 2>{static_cast<unsigned int>(note_min), static_cast<unsigned int>(note_max)});
+            setParamNormalized(kNoteMaxId, note_max / 127.0);
+        });
+        read_param(max_length, [&]() { setParamNormalized(kMaxLengthId, max_length / 32.0); });
+    } catch (const std::runtime_error&) {
         return kResultFalse;
-
-    bool saved_sync = 0;
-    if (streamer.readBool(saved_sync) == false)
-        return kResultFalse;
-
-    int32 saved_beat_numerator = 0;
-    if (streamer.readInt32(saved_beat_numerator) == false)
-        return kResultFalse;
-
-    int32 saved_beat_denominator = 0;
-    if (streamer.readInt32(saved_beat_denominator) == false)
-        return kResultFalse;
-
-    bool saved_combine_notes = 0;
-    if (streamer.readBool(saved_combine_notes) == false)
-        return kResultFalse;
-    int32 saved_threshold = 0;
-    if (streamer.readInt32(saved_threshold) == false)
-        return kResultFalse;
-    int32 saved_transpose = 0;
-    if (streamer.readInt32(saved_transpose) == false)
-        return kResultFalse;
-    int32 saved_ceiling = 0;
-    if (streamer.readInt32(saved_ceiling) == false)
-        return kResultFalse;
-    int32 saved_pitch_set_index = 0;
-    if (streamer.readInt32(saved_pitch_set_index) == false)
-        return kResultFalse;
-    uint32 saved_note_min = 0;
-    if (streamer.readInt32u(saved_note_min) == false)
-        return kResultFalse;
-    uint32 saved_note_max = 0;
-    if (streamer.readInt32u(saved_note_max) == false)
-        return kResultFalse;
-    uint32 saved_max_length = 0;
-    if (streamer.readInt32u(saved_max_length) == false)
-        return kResultFalse;
-
-    time_window_param = saved_time_window;
-    threshold = saved_threshold;
-    converter.set_activation_level(threshold / 127.0);
-    note_count = saved_note_count;
-    converter.set_note_count(note_count);
-    sync = saved_sync;
-    beat_numerator = saved_beat_numerator;
-    beat_denominator = saved_beat_denominator;
-    combine_notes = saved_combine_notes;
-    transpose = saved_transpose;
-    converter.set_transpose(transpose);
-    ceiling = saved_ceiling;
-    converter.set_ceiling(ceiling / 127.0);
-    pitch_set_index = saved_pitch_set_index;
-    pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
-    converter.set_pitch_set(pitch_set);
-    note_min = saved_note_min;
-    note_max = saved_note_max;
-    converter.set_pitch_range(std::array<unsigned int, 2>{note_min, note_max});
-    max_length = saved_max_length;
-
-    setParamNormalized(kTimeWindowId, time_window / 1000.0);
-    setParamNormalized(kNoteCountId, note_count / 127.0);
-    setParamNormalized(kSyncId, sync);
-    setParamNormalized(kBeatNumeratorId, beat_numerator / 16.0);
-    setParamNormalized(kBeatDenominatorId, beat_denominator / 16.0);
-    setParamNormalized(kCombineNotesId, combine_notes);
-    setParamNormalized(kThresholdId, threshold / 127.0);
-    setParamNormalized(kTransposeId, (transpose + 127) / 255.0);
-    setParamNormalized(kCeilingId, ceiling / 127.0);
-    setParamNormalized(kPitchSetId, static_cast<double>(pitch_set_index) / njones::audio::PITCH_SET.size());
-    setParamNormalized(kNoteMinId, note_min / 127.0);
-    setParamNormalized(kNoteMaxId, note_max / 127.0);
-    setParamNormalized(kMaxLengthId, max_length / 32.0);
-
-    if (sync)
-        set_beat();
-    else
-        set_time_window(time_window_param);
+    }
 
     return kResultOk;
 }
@@ -421,17 +480,18 @@ tresult PLUGIN_API Eris::getState(IBStream* state) {
 
     streamer.writeInt32(time_window_param);
     streamer.writeInt32(note_count);
-    streamer.writeBool(sync);
+    streamer.writeInt32(sync);
     streamer.writeInt32(beat_numerator);
     streamer.writeInt32(beat_denominator);
-    streamer.writeBool(combine_notes);
+    streamer.writeInt32(combine_notes);
     streamer.writeInt32(threshold);
-    streamer.writeInt32(transpose);
+    streamer.writeInt32(key);
+    streamer.writeInt32(octave);
     streamer.writeInt32(ceiling);
     streamer.writeInt32(pitch_set_index);
-    streamer.writeInt32u(note_min);
-    streamer.writeInt32u(note_max);
-    streamer.writeInt32u(max_length);
+    streamer.writeInt32(note_min);
+    streamer.writeInt32(note_max);
+    streamer.writeInt32(max_length);
 
     return kResultOk;
 }
@@ -617,8 +677,8 @@ tresult PLUGIN_API Eris::queryInterface(const TUID iid, void** obj) {
 
 enum {
     // UI size
-    kEditorWidth = 350,
-    kEditorHeight = 120
+    kEditorWidth = 535,
+    kEditorHeight = 320
 };
 
 }  // namespace Vst
@@ -632,15 +692,15 @@ bool DeinitModule() {
     return true;
 }
 
-BEGIN_FACTORY_DEF("Neil Jones", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
+BEGIN_FACTORY_DEF("Damned Dog Music", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
 
-DEF_CLASS2(INLINE_UID(0xB9F9ADE1, 0xCD9C4B6D, 0xA57E61E3, 0x123535FD),
-           PClassInfo::kManyInstances,            // cardinality
-           kVstAudioEffectClass,                  // the component category (do not changed this)
-           "Eris VST3",                           // here the plug-in name (to be changed)
-           0,                                     // single component effects cannot be distributed so this is zero
-           "Fx",                                  // Subcategory for this plug-in (to be changed)
-           FULL_VERSION_STR,                      // Plug-in version (to be changed)
+DEF_CLASS2(INLINE_UID(0x2D7B2972, 0x3F4547FA, 0xA996468E, 0xE2668886),
+           PClassInfo::kManyInstances,              // cardinality
+           kVstAudioEffectClass,                    // the component category (do not changed this)
+           "Eris",                                  // here the plug-in name (to be changed)
+           0,                                       // single component effects cannot be distributed so this is zero
+           Steinberg::Vst::PlugType::kFxGenerator,  // Subcategory for this plug-in (to be changed)
+           FULL_VERSION_STR,                        // Plug-in version (to be changed)
            kVstVersionString,                     // the VST 3 SDK version (do not changed this, use always this define)
            Steinberg::Vst::Eris::createInstance)  // function pointer called when this component should be instantiated
 
