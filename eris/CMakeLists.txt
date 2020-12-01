@@ -2,6 +2,8 @@
 include_directories("../a2m/src/")
 include_directories("${SDK_ROOT}")
 
+set(CMAKE_CXX_STANDARD 20)
+
 add_compile_definitions(FMT_HEADER_ONLY=1)
 
 if(SMTG_ADD_VSTGUI)

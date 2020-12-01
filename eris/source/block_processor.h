@@ -70,8 +70,6 @@ class BlockProcessor {
     int get_block_size() const { return block_size; }
 
     void add(SampleType** samples, const int nsamples) {
-        static std::vector<std::thread> pool;
-
         int remaining = nsamples;
         int offset = 0;
         int channel_index;
@@ -88,15 +86,12 @@ class BlockProcessor {
                     buffer[channel][channel_index++] = static_cast<ConversionType>(samples[channel][channel_offset++]);
 
                     if (channel_index == block_size) {
-                        pool.emplace_back(std::thread{processor, channel, buffer[channel].data(), channel_offset});
+                        processor(channel, buffer[channel].data(), channel_offset);
                         channel_index = 0;
                         break;
                     }
                 }
             }
-            for (auto& t : pool)
-                t.join();
-            pool.clear();
             remaining = channel_remaining;
             offset = channel_offset;
             index = channel_index;

@@ -9,7 +9,7 @@ enum {
     kBeatNumeratorId,
     kBeatDenominatorId,
     kCombineNotesId,
-	kThresholdId,
+    kThresholdId,
     kCeilingId,
     kPitchSetId,
     kNoteMinId,
