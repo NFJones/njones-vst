@@ -1,6 +1,3 @@
 [submodule "vst3sdk"]
 	path = vst3sdk
 	url = git@github.com:steinbergmedia/vst3sdk.git
-[submodule "a2m"]
-	path = a2m
-	url = git@github.com:NFJones/a2m.git
