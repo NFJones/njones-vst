@@ -21,5 +21,5 @@ include(SMTG_VST3_SDK)
 smtg_setup_platform_toolset()
 
 add_subdirectory(eris)
-add_subdirectory(a2m)
+add_subdirectory(njones-audio)
 add_subdirectory(vst3sdk)

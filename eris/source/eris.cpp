@@ -26,36 +26,45 @@
 
 using namespace VSTGUI;
 
+static void log(const std::string& msg) {
+#if ERIS_TEST
+    std::ofstream outfile("C:/Users/neilf/Downloads/eris.log", std::ios::app);
+    outfile << msg << std::endl;
+#endif
+}
+
 namespace Steinberg {
 namespace Vst {
 
 Eris::Eris()
-    : time_window(5),
-      time_window_param(5),
+    : time_window(500.0),
+      time_window_param(500),
       threshold(0),
       block_size(0),
-      note_count(0),
-      sync(0),
-      beat_numerator(1),
-      beat_denominator(4),
-      combine_notes(0),
+      real_block_size(0.0),
+      note_count(5),
+      sync(1),
+      beat_numerator(2),
+      beat_denominator(5),
+      combine_notes(1),
       currentProcessMode(-1),
       converter(processSetup.sampleRate, 0),
       pitch_set_index(0),
       sample_rate(0),
       note_min(0),
       note_max(127),
-      max_length(0),
-      key(0),
-      octave(0) {
+      max_length(3),
+      key(2),
+      octave(0),
+      ceiling(30) {
     clear_buffers();
-    set_time_window(time_window_param);
+    set_beat();
     for (int32 channel = 0; channel < 2; ++channel)
         note_state.push_back(std::array<NoteState, 128>());
 }
 
-int Eris::time_window_to_block_size() {
-    return static_cast<int>((processSetup.sampleRate / 1000.0) * time_window);
+double Eris::time_window_to_block_size() {
+    return (processSetup.sampleRate / 1000.0) * time_window;
 }
 
 void Eris::clear_buffers() {
@@ -63,10 +72,11 @@ void Eris::clear_buffers() {
     buffer_64.clear();
 }
 
-void Eris::set_time_window(const int32 time_window) {
-    this->time_window = time_window >= 5 ? time_window : 5;
+void Eris::set_time_window(const double time_window) {
+    this->time_window = time_window >= 5.0 ? time_window : 5.0;
     int old_block_size = block_size;
-    block_size = time_window_to_block_size();
+    real_block_size = time_window_to_block_size();
+    block_size = static_cast<int>(real_block_size);
 
     if (old_block_size != block_size) {
         clear_buffers();
@@ -87,13 +97,16 @@ void Eris::set_beat() {
 
 NoteState::NoteState(const bool is_active, const int32 count) : is_active(is_active), count(count) {}
 
-void Eris::terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes) {
+void Eris::terminate_notes(const int channel,
+                           int offset,
+                           ProcessData& data,
+                           const std::vector<njones::audio::a2m::Note>& new_notes) {
     for (unsigned int pitch = 0; pitch < note_state[channel].size(); ++pitch) {
         auto& state = note_state[channel][pitch];
         if (state.is_active) {
-            if ((!combine_notes) ||
-                (combine_notes && ((find(new_notes.begin(), new_notes.end(), a2m::Note(pitch, 0)) == new_notes.end()) ||
-                                   (state.count > max_length && max_length > 0)))) {
+            if ((!combine_notes) || (combine_notes && ((find(new_notes.begin(), new_notes.end(),
+                                                             njones::audio::a2m::Note(pitch, 0)) == new_notes.end()) ||
+                                                       (state.count > max_length && max_length > 0)))) {
                 NoteOffEvent note_off{static_cast<int16>(channel), static_cast<int16>(pitch), 0.0f, -1, 0.0f};
                 Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOffEvent};
                 event.noteOff = note_off;
@@ -105,7 +118,10 @@ void Eris::terminate_notes(const int channel, int offset, ProcessData& data, con
     }
 }
 
-void Eris::initiate_notes(const int channel, const std::vector<a2m::Note>& notes, int offset, ProcessData& data) {
+void Eris::initiate_notes(const int channel,
+                          const std::vector<njones::audio::a2m::Note>& notes,
+                          int offset,
+                          ProcessData& data) {
     for (auto& note : notes) {
         NoteOnEvent note_on{static_cast<int16>(channel),
                             static_cast<int16>(note.pitch),
@@ -127,19 +143,27 @@ void Eris::initiate_notes(const int channel, const std::vector<a2m::Note>& notes
 
 void Eris::convert(ProcessData& data) {
     void** in = getChannelBuffersPointer(processSetup, data.inputs[0]);
-    if (sample_rate != processSetup.sampleRate) {
-        converter.set_samplerate(processSetup.sampleRate);
-        if (sync)
-            set_beat();
-        else
-            set_time_window(time_window_param);
-        sample_rate = processSetup.sampleRate;
+    if (sample_rate != data.processContext->sampleRate) {
+        converter.set_samplerate(data.processContext->sampleRate);
+        sample_rate = data.processContext->sampleRate;
     }
-    std::function<void(const int, double*, const int)> processor = [&](const int channel, double* samples,
-                                                                       const int event_offset) -> void {
+
+    const double bar_position =
+        data.processContext->barPositionMusic - static_cast<int>(data.processContext->barPositionMusic);
+    const int bars_since_intersection = static_cast<int>(bar_position) % beat_numerator;
+    const double blocks_per_bar = (static_cast<double>(beat_denominator) / beat_numerator);
+    const double blocks_since_intersection = blocks_per_bar * bars_since_intersection;
+    const double first_block = blocks_since_intersection - static_cast<int>(blocks_since_intersection);
+    const int first_block_offset = first_block * block_size;
+    int blocks_sent[2] = {0, 0};
+
+    auto processor = [&](const int channel, double* samples, const int event_offset) -> void {
         auto notes = converter.convert(samples);
-        terminate_notes(channel, event_offset, data, notes);
-        initiate_notes(channel, notes, event_offset, data);
+        int offset = event_offset;
+        if (sync)
+            offset = (blocks_sent[channel]++ * real_block_size) + first_block_offset;
+        terminate_notes(channel, offset, data, notes);
+        initiate_notes(channel, notes, offset, data);
     };
 
     if (data.symbolicSampleSize == kSample32) {
@@ -154,16 +178,19 @@ void Eris::convert(ProcessData& data) {
 }
 
 tresult PLUGIN_API Eris::process(ProcessData& data) {
-    process_inputs(data);
-    process_parameters(data);
-    if (data.numInputs == 0 || data.numOutputs == 0)
+    try {
+        process_inputs(data);
+        process_parameters(data);
+        if (data.numInputs == 0 || data.numOutputs == 0)
+            return kResultOk;
+        if (data.inputs[0].silenceFlags == 0) {
+            data.outputs[0].silenceFlags = 1;
+            convert(data);
+        }
         return kResultOk;
-    if (data.inputs[0].silenceFlags == 0) {
-        data.outputs[0].silenceFlags = 1;
-        convert(data);
+    } catch (const std::exception&) {
+        return kInternalError;
     }
-
-    return kResultOk;
 }
 
 void Eris::process_inputs(ProcessData& data) {
@@ -242,7 +269,7 @@ void Eris::process_inputs(ProcessData& data) {
         Event event;
         data.inputEvents->getEvent(input, event);
 
-        if (event.type == Event::kNoteOnEvent) {
+        if (event.type == Event::kNoteOnEvent && event.noteOn.channel == 0) {
             NoteOnEvent note_on = event.noteOn;
             for (const auto& processor : input_processors)
                 if (note_on.pitch >= processor.first.first && note_on.pitch <= processor.first.second)
@@ -299,13 +326,13 @@ void Eris::process_parameters(ProcessData& data) {
                         break;
                     case kBeatNumeratorId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
-                            beat_numerator = 16 * value;
+                            beat_numerator = 15 * value + 1;
                             set_beat();
                         }
                         break;
                     case kBeatDenominatorId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
-                            beat_denominator = 16 * value;
+                            beat_denominator = 15 * value + 1;
                             set_beat();
                         }
                         break;
@@ -390,17 +417,17 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
         parameters.addParameter(new_param);
     };
 
-    add_range_param("Window", kTimeWindowId, 5.0, 1000.0, 5.0, 995);
+    add_range_param("Window", kTimeWindowId, 5.0, 1000.0, 500.0, 995);
     add_range_param("Threshold", kThresholdId, 0.0, 127.0, 0.0, 127);
-    add_range_param("Normalize", kCeilingId, 1.0, 127.0, 127.0, 126);
-    add_range_param("Count", kNoteCountId, 0.0, 127.0, 0.0, 127);
+    add_range_param("Normalize", kCeilingId, 1.0, 127.0, 30.0, 126);
+    add_range_param("Count", kNoteCountId, 0.0, 127.0, 5.0, 127);
     add_range_param("Min", kNoteMinId, 0.0, 127.0, 0.0, 127);
     add_range_param("Max", kNoteMaxId, 0.0, 127.0, 127.0, 127);
-    add_range_param("Beat Sync", kSyncId, 0.0, 1.0, 0.0, 1);
-    add_range_param("Multiplier", kBeatNumeratorId, 1.0, 16.0, 1.0, 15);
-    add_range_param("Divider", kBeatDenominatorId, 1.0, 16.0, 1.0, 15);
-    add_range_param("Combine", kCombineNotesId, 0.0, 1.0, 0.0, 1);
-    add_range_param("Length", kMaxLengthId, 0.0, 32, 0.0, 32);
+    add_range_param("Beat Sync", kSyncId, 0.0, 1.0, 1.0, 1);
+    add_range_param("Multiplier", kBeatNumeratorId, 1.0, 16.0, 2.0, 15);
+    add_range_param("Divider", kBeatDenominatorId, 1.0, 16.0, 5.0, 15);
+    add_range_param("Combine", kCombineNotesId, 0.0, 1.0, 1.0, 1);
+    add_range_param("Length", kMaxLengthId, 0.0, 32, 3.0, 32);
     add_list_param("Key", kKeyId, njones::audio::KEY);
     add_range_param("Octave", kOctaveId, -10.0, 10.0, 0.0, 20);
     add_list_param("Scale", kPitchSetId, njones::audio::PITCH_SET);
@@ -421,7 +448,7 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
     auto int32_reader = [&](int32& var) -> bool { return streamer.readInt32(var); };
 
     try {
-        read_param(time_window, [&]() { setParamNormalized(kTimeWindowId, time_window / 1000.0); });
+        read_param(time_window_param, [&]() { setParamNormalized(kTimeWindowId, time_window_param / 1000.0); });
         read_param(note_count, [&]() {
             converter.set_note_count(note_count);
             setParamNormalized(kNoteCountId, note_count / 127.0);
@@ -430,11 +457,11 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
             if (sync)
                 set_beat();
             else
-                set_time_window(time_window_param);
+                set_time_window(static_cast<double>(time_window_param));
             setParamNormalized(kSyncId, sync);
         });
-        read_param(beat_numerator, [&]() { setParamNormalized(kBeatNumeratorId, beat_numerator / 16.0); });
-        read_param(beat_denominator, [&]() { setParamNormalized(kBeatDenominatorId, beat_denominator / 16.0); });
+        read_param(beat_numerator, [&]() { setParamNormalized(kBeatNumeratorId, (beat_numerator - 1) / 15.0); });
+        read_param(beat_denominator, [&]() { setParamNormalized(kBeatDenominatorId, (beat_denominator - 1) / 15.0); });
         read_param(combine_notes, [&]() { setParamNormalized(kCombineNotesId, combine_notes); });
         read_param(threshold, [&]() {
             converter.set_activation_level(threshold / 127.0);
@@ -692,7 +719,7 @@ bool DeinitModule() {
     return true;
 }
 
-BEGIN_FACTORY_DEF("Damned Dog Music", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
+BEGIN_FACTORY_DEF("Neil F. Jones", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
 
 DEF_CLASS2(INLINE_UID(0x2D7B2972, 0x3F4547FA, 0xA996468E, 0xE2668886),
            PClassInfo::kManyInstances,              // cardinality

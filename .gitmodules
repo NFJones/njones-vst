@@ -1,3 +1,6 @@
 [submodule "vst3sdk"]
 	path = vst3sdk
 	url = git@github.com:steinbergmedia/vst3sdk.git
+[submodule "njones-audio"]
+	path = njones-audio
+	url = git@github.com:NFJones/njones-audio.git

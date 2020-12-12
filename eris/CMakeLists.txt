@@ -1,5 +1,5 @@
 
-include_directories("../a2m/src/")
+include_directories("../njones-audio/src/")
 include_directories("${SDK_ROOT}")
 
 set(CMAKE_CXX_STANDARD 20)

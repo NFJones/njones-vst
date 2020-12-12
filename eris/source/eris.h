@@ -8,11 +8,11 @@
 
 #include "vstgui/plugin-bindings/vst3editor.h"
 
-#include <a2m/converter.h>
+#include <njones/a2m/converter.h>
+#include <njones/lib/ring_buffer.h>
 #include <map>
 #include <mutex>
 
-#include "block_processor.h"
 #include "pitch_set.h"
 
 namespace Steinberg {
@@ -95,29 +95,30 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     int32 ceiling;
 
     std::vector<unsigned int> pitch_set;
-    int32 time_window;
+    double time_window;
     int32 block_size;
+    double real_block_size;
     float tempo;
     int32 sample_rate;
 
-    a2m::Converter converter;
+    njones::audio::a2m::Converter converter;
+    njones::audio::RingBuffer<Sample32> buffer_32;
+    njones::audio::RingBuffer<Sample64> buffer_64;
     std::vector<std::array<NoteState, 128>> note_state;
-    njones::audio::BlockProcessor<Sample32> buffer_32;
-    njones::audio::BlockProcessor<Sample64> buffer_64;
 
     int32 currentProcessMode;
     using UIMessageControllerList = std::vector<UIMessageController*>;
     UIMessageControllerList uiMessageControllers;
     String128 defaultMessageText;
 
-    int time_window_to_block_size();
+    double time_window_to_block_size();
     void process_parameters(ProcessData& data);
     void process_inputs(ProcessData& data);
-    void set_time_window(const int32 time_window);
+    void set_time_window(const double time_window);
     void set_beat();
     void clear_buffers();
-    void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<a2m::Note>& new_notes);
-    void initiate_notes(const int channel, const std::vector<a2m::Note>& notes, int offset, ProcessData& data);
+    void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<njones::audio::a2m::Note>& new_notes);
+    void initiate_notes(const int channel, const std::vector<njones::audio::a2m::Note>& notes, int offset, ProcessData& data);
     void convert(ProcessData& data);
 };
 }  // namespace Vst
