@@ -26,6 +26,6 @@
 #else
 #define stringFileDescription "Eris VST3"
 #endif
-#define stringCompanyName "Damned Dog Music\0"
+#define stringCompanyName "Neil F Jones\0"
 #define stringLegalCopyright "© 2020 Neil F Jones"
 #define stringLegalTrademarks "VST is a trademark of Steinberg Media Technologies GmbH"
