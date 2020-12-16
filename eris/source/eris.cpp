@@ -26,13 +26,6 @@
 
 using namespace VSTGUI;
 
-static void log(const std::string& msg) {
-#if ERIS_TEST
-    std::ofstream outfile("C:/Users/neilf/Downloads/eris.log", std::ios::app);
-    outfile << msg << std::endl;
-#endif
-}
-
 namespace Steinberg {
 namespace Vst {
 
@@ -50,13 +43,15 @@ Eris::Eris()
       currentProcessMode(-1),
       converter(processSetup.sampleRate, 0),
       pitch_set_index(0),
+      pitch_set(njones::audio::PITCH_SET.at(0).second),
       sample_rate(0),
       note_min(0),
       note_max(127),
       max_length(3),
       key(2),
       octave(0),
-      ceiling(30) {
+      ceiling(30),
+      transpose(0) {
     clear_buffers();
     set_beat();
     for (int32 channel = 0; channel < 2; ++channel)
@@ -93,6 +88,14 @@ void Eris::set_beat() {
         double beat_per_ms = second_per_beat * 1000;
         set_time_window(ratio * beat_per_ms);
     }
+}
+
+void Eris::set_rotation() {
+    std::vector<unsigned int> rotated;
+    std::copy(pitch_set.begin(), pitch_set.end(), std::back_inserter(rotated));
+    for (auto &pitch : rotated)
+        pitch = (pitch + key) % 12;
+    converter.set_pitch_set(rotated);
 }
 
 NoteState::NoteState(const bool is_active, const int32 count) : is_active(is_active), count(count) {}
@@ -215,14 +218,14 @@ void Eris::process_inputs(ProcessData& data) {
          [&](const int pitch) {
              // Octave
              octave = pitch - 10;
-             converter.set_transpose(octave * 12 + key);
+             converter.set_transpose(octave * 12 + transpose);
              set_parameter(kOctaveId, (octave + 10) / 20.0);
          }},
         {{24, 24 + njones::audio::KEY.size() - 1},
          [&](const int pitch) {
              // Key
              key = pitch - 24;
-             converter.set_transpose(octave * 12 + key);
+             set_rotation();
              set_parameter(kKeyId, static_cast<double>(key) / (njones::audio::KEY.size() - 1));
          }},
         {{24 + njones::audio::KEY.size(), 24 + njones::audio::KEY.size() + njones::audio::PITCH_SET.size() - 1},
@@ -230,7 +233,7 @@ void Eris::process_inputs(ProcessData& data) {
              // Scale
              pitch_set_index = static_cast<int32>(static_cast<unsigned int>(pitch) - (24 + njones::audio::KEY.size()));
              pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
-             converter.set_pitch_set(pitch_set);
+             set_rotation();
              set_parameter(kPitchSetId, static_cast<double>(pitch_set_index) / (njones::audio::PITCH_SET.size() - 1));
          }},
         {{69, 101},
@@ -343,20 +346,26 @@ void Eris::process_parameters(ProcessData& data) {
                     case kKeyId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             key = value * (njones::audio::KEY.size() - 1);
-                            converter.set_transpose(octave * 12 + key);
+                            set_rotation();
                         }
                         break;
                     case kOctaveId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             octave = value * 20 - 10;
-                            converter.set_transpose(octave * 12 + key);
+                            converter.set_transpose(octave * 12 + transpose);
+                        }
+                        break;
+                    case kTransposeId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            transpose = value * (njones::audio::KEY.size() - 1);
+                            converter.set_transpose(octave * 12 + transpose);
                         }
                         break;
                     case kPitchSetId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             pitch_set_index = value * (njones::audio::PITCH_SET.size() - 1);
                             pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
-                            converter.set_pitch_set(pitch_set);
+                            set_rotation();
                         }
                         break;
                     case kNoteMinId:
@@ -429,6 +438,7 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
     add_range_param("Combine", kCombineNotesId, 0.0, 1.0, 1.0, 1);
     add_range_param("Length", kMaxLengthId, 0.0, 32, 3.0, 32);
     add_list_param("Key", kKeyId, njones::audio::KEY);
+    add_range_param("Transpose", kTransposeId, 0.0, 11.0, 0.0, 11);
     add_range_param("Octave", kOctaveId, -10.0, 10.0, 0.0, 20);
     add_list_param("Scale", kPitchSetId, njones::audio::PITCH_SET);
 
@@ -468,11 +478,11 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
             setParamNormalized(kThresholdId, threshold / 127.0);
         });
         read_param(key, [&]() {
-            converter.set_transpose(octave * 12 + key);
+            set_rotation();
             setParamNormalized(kKeyId, static_cast<double>(key) / njones::audio::KEY.size());
         });
         read_param(octave, [&]() {
-            converter.set_transpose(octave * 12 + key);
+            converter.set_transpose(octave * 12 + transpose);
             setParamNormalized(kOctaveId, (octave + 10) / 20.0);
         });
         read_param(ceiling, [&]() {
@@ -481,7 +491,7 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
         });
         read_param(pitch_set_index, [&]() {
             pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
-            converter.set_pitch_set(pitch_set);
+            set_rotation();
             setParamNormalized(kPitchSetId, static_cast<double>(pitch_set_index) / njones::audio::PITCH_SET.size());
         });
         read_param(note_min, [&]() {
@@ -495,6 +505,10 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
             setParamNormalized(kNoteMaxId, note_max / 127.0);
         });
         read_param(max_length, [&]() { setParamNormalized(kMaxLengthId, max_length / 32.0); });
+        read_param(transpose, [&]() {
+            converter.set_transpose(octave * 12 + transpose);
+            setParamNormalized(kTransposeId, transpose / 11.0);
+        });
     } catch (const std::runtime_error&) {
         return kResultFalse;
     }
@@ -519,6 +533,7 @@ tresult PLUGIN_API Eris::getState(IBStream* state) {
     streamer.writeInt32(note_min);
     streamer.writeInt32(note_max);
     streamer.writeInt32(max_length);
+    streamer.writeInt32(transpose);
 
     return kResultOk;
 }

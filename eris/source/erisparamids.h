@@ -16,5 +16,6 @@ enum {
     kNoteMaxId,
     kMaxLengthId,
     kKeyId,
-    kOctaveId
+    kOctaveId,
+    kTransposeId,
 };

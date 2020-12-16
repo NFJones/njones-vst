@@ -86,6 +86,7 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     int32 beat_denominator;
     int32 combine_notes;
     int32 key;
+    int32 transpose;
     int32 pitch_set_index;
     int32 threshold;
     int32 octave;
@@ -116,6 +117,7 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     void process_inputs(ProcessData& data);
     void set_time_window(const double time_window);
     void set_beat();
+    void set_rotation();
     void clear_buffers();
     void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<njones::audio::a2m::Note>& new_notes);
     void initiate_notes(const int channel, const std::vector<njones::audio::a2m::Note>& notes, int offset, ProcessData& data);
