@@ -42,16 +42,17 @@ Eris::Eris()
       combine_notes(1),
       currentProcessMode(-1),
       converter(processSetup.sampleRate, 0),
-      pitch_set_index(0),
-      pitch_set(njones::audio::PITCH_SET.at(0).second),
+      pitch_set_index(1),
+      pitch_set(njones::audio::PITCH_SET.at(1).second),
       sample_rate(0),
       note_min(0),
       note_max(127),
       max_length(3),
-      key(2),
+      key(0),
       octave(0),
       ceiling(30),
-      transpose(0) {
+      transpose(0),
+      tempo(0) {
     clear_buffers();
     set_beat();
     for (int32 channel = 0; channel < 2; ++channel)
@@ -69,7 +70,8 @@ void Eris::clear_buffers() {
 
 void Eris::set_time_window(const double time_window) {
     this->time_window = time_window >= 5.0 ? time_window : 5.0;
-    int old_block_size = block_size;
+    this->time_window = time_window >= 10000.0 ? 10000.0 : time_window;
+    const int old_block_size = block_size;
     real_block_size = time_window_to_block_size();
     block_size = static_cast<int>(real_block_size);
 
@@ -93,7 +95,7 @@ void Eris::set_beat() {
 void Eris::set_rotation() {
     std::vector<unsigned int> rotated;
     std::copy(pitch_set.begin(), pitch_set.end(), std::back_inserter(rotated));
-    for (auto &pitch : rotated)
+    for (auto& pitch : rotated)
         pitch = (pitch + key) % 12;
     converter.set_pitch_set(rotated);
 }
@@ -186,7 +188,7 @@ tresult PLUGIN_API Eris::process(ProcessData& data) {
         process_parameters(data);
         if (data.numInputs == 0 || data.numOutputs == 0)
             return kResultOk;
-        if (data.inputs[0].silenceFlags == 0) {
+        if (data.inputs && data.outputs && data.inputs[0].silenceFlags == 0) {
             data.outputs[0].silenceFlags = 1;
             convert(data);
         }
@@ -345,7 +347,7 @@ void Eris::process_parameters(ProcessData& data) {
                         break;
                     case kKeyId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
-                            key = value * (njones::audio::KEY.size() - 1);
+                            key = (value * njones::audio::KEY.size()) - 1;
                             set_rotation();
                         }
                         break;
