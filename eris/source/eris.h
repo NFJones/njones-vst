@@ -10,10 +10,17 @@
 
 #include <njones/a2m/converter.h>
 #include <njones/lib/ring_buffer.h>
+#include <njones/lib/udp_logger.h>
 #include <map>
 #include <mutex>
 
 #include "pitch_set.h"
+
+#define ERIS_TEST 0
+
+#if ERIS_TEST
+#include <njones/lib/udp_logger.h>
+#endif
 
 namespace Steinberg {
 namespace Vst {
@@ -107,6 +114,10 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     njones::audio::RingBuffer<Sample64> buffer_64;
     std::vector<std::array<NoteState, 128>> note_state;
 
+#if ERIS_TEST
+    njones::audio::UDPLogger logger;
+#endif
+
     int32 currentProcessMode;
     using UIMessageControllerList = std::vector<UIMessageController*>;
     UIMessageControllerList uiMessageControllers;
@@ -115,13 +126,21 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     double time_window_to_block_size();
     void process_parameters(ProcessData& data);
     void process_inputs(ProcessData& data);
+    void set_parameter(ProcessData& data, const int param_id, const double value);
     void set_time_window(const double time_window);
     void set_beat();
     void set_rotation();
     void clear_buffers();
-    void terminate_notes(const int channel, int offset, ProcessData& data, const std::vector<njones::audio::a2m::Note>& new_notes);
-    void initiate_notes(const int channel, const std::vector<njones::audio::a2m::Note>& notes, int offset, ProcessData& data);
+    void terminate_notes(const int channel,
+                         int offset,
+                         ProcessData& data,
+                         const std::vector<njones::audio::a2m::Note>& new_notes);
+    void initiate_notes(const int channel,
+                        const std::vector<njones::audio::a2m::Note>& notes,
+                        int offset,
+                        ProcessData& data);
     void convert(ProcessData& data);
+    void log(const std::string&msg);
 };
 }  // namespace Vst
 }  // namespace Steinberg

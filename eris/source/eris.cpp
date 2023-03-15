@@ -22,15 +22,17 @@
 #include <iostream>
 #include <map>
 
-#define ERIS_TEST 0
-
 using namespace VSTGUI;
 
 namespace Steinberg {
 namespace Vst {
 
 Eris::Eris()
-    : time_window(500.0),
+    :
+#if ERIS_TEST
+      logger("127.0.0.1", 4567),
+#endif
+      time_window(500.0),
       time_window_param(500),
       threshold(0),
       block_size(0),
@@ -57,6 +59,15 @@ Eris::Eris()
     set_beat();
     for (int32 channel = 0; channel < 2; ++channel)
         note_state.push_back(std::array<NoteState, 128>());
+#if ERIS_TEST
+    converter.set_logger([&](const std::string& msg) { log(msg); });
+#endif
+}
+
+void Eris::log(const std::string& msg) {
+#if ERIS_TEST
+    logger.log(fmt::format("{}\r\n", msg));
+#endif
 }
 
 double Eris::time_window_to_block_size() {
@@ -109,9 +120,10 @@ void Eris::terminate_notes(const int channel,
     for (unsigned int pitch = 0; pitch < note_state[channel].size(); ++pitch) {
         auto& state = note_state[channel][pitch];
         if (state.is_active) {
-            if ((!combine_notes) || (combine_notes && ((find(new_notes.begin(), new_notes.end(),
-                                                             njones::audio::a2m::Note(pitch, 0)) == new_notes.end()) ||
-                                                       (state.count > max_length && max_length > 0)))) {
+            if ((!combine_notes) ||
+                (combine_notes && ((find(new_notes.begin(), new_notes.end(),
+                                         njones::audio::a2m::Note(pitch, pitch, 0)) == new_notes.end()) ||
+                                   (state.count > max_length && max_length > 0)))) {
                 NoteOffEvent note_off{static_cast<int16>(channel), static_cast<int16>(pitch), 0.0f, -1, 0.0f};
                 Event event{0, offset, 0.0, Event::kIsLive, Event::kNoteOffEvent};
                 event.noteOff = note_off;
@@ -153,20 +165,21 @@ void Eris::convert(ProcessData& data) {
         sample_rate = data.processContext->sampleRate;
     }
 
-    const double bar_position =
-        data.processContext->barPositionMusic - static_cast<int>(data.processContext->barPositionMusic);
-    const int bars_since_intersection = static_cast<int>(bar_position) % beat_numerator;
-    const double blocks_per_bar = (static_cast<double>(beat_denominator) / beat_numerator);
-    const double blocks_since_intersection = blocks_per_bar * bars_since_intersection;
-    const double first_block = blocks_since_intersection - static_cast<int>(blocks_since_intersection);
-    const int first_block_offset = first_block * block_size;
-    int blocks_sent[2] = {0, 0};
+    auto quantize = [&](int event_offset) -> int {
+        if (sync) {
+            int block_number = event_offset / real_block_size;
+            int quantized_block_number = (block_number / beat_numerator) * beat_numerator;
+            int quantized_offset = quantized_block_number * real_block_size;
+            return quantized_offset;
+        } else {
+            return event_offset;
+        }
+    };
 
     auto processor = [&](const int channel, double* samples, const int event_offset) -> void {
         auto notes = converter.convert(samples);
-        int offset = event_offset;
-        if (sync)
-            offset = (blocks_sent[channel]++ * real_block_size) + first_block_offset;
+        int offset = quantize(event_offset);
+
         terminate_notes(channel, offset, data, notes);
         initiate_notes(channel, notes, offset, data);
     };
@@ -198,37 +211,38 @@ tresult PLUGIN_API Eris::process(ProcessData& data) {
     }
 }
 
+void Eris::set_parameter(ProcessData& data, const int param_id, const double value) {
+    int32 queue_index = 0;
+    int32 param_index = 0;
+    IParameterChanges* outParamChanges = data.outputParameterChanges;
+    if (outParamChanges) {
+        IParamValueQueue* paramQueue = outParamChanges->addParameterData(param_id, queue_index);
+        if (paramQueue)
+            paramQueue->addPoint(0, value, param_index);
+    }
+    setParamNormalized(param_id, value);
+}
+
 void Eris::process_inputs(ProcessData& data) {
     const int input_count = data.inputEvents->getEventCount();
 
     if (input_count == 0)
         return;
 
-    int32 queue_index = 0;
-    int32 param_index = 0;
-    IParameterChanges* outParamChanges = data.outputParameterChanges;
-    auto set_parameter = [&](const int param_id, const double value) {
-        if (outParamChanges) {
-            IParamValueQueue* paramQueue = outParamChanges->addParameterData(param_id, queue_index);
-            if (paramQueue)
-                paramQueue->addPoint(0, value, param_index);
-        }
-        setParamNormalized(param_id, value);
-    };
     std::vector<std::pair<std::pair<int, int>, std::function<void(const int)>>> input_processors = {
         {{0, 20},
          [&](const int pitch) {
              // Octave
              octave = pitch - 10;
              converter.set_transpose(octave * 12 + transpose);
-             set_parameter(kOctaveId, (octave + 10) / 20.0);
+             set_parameter(data, kOctaveId, (octave + 10) / 20.0);
          }},
         {{24, 24 + njones::audio::KEY.size() - 1},
          [&](const int pitch) {
              // Key
              key = pitch - 24;
              set_rotation();
-             set_parameter(kKeyId, static_cast<double>(key) / (njones::audio::KEY.size() - 1));
+             set_parameter(data, kKeyId, static_cast<double>(key) / (njones::audio::KEY.size() - 1));
          }},
         {{24 + njones::audio::KEY.size(), 24 + njones::audio::KEY.size() + njones::audio::PITCH_SET.size() - 1},
          [&](const int pitch) {
@@ -236,37 +250,38 @@ void Eris::process_inputs(ProcessData& data) {
              pitch_set_index = static_cast<int32>(static_cast<unsigned int>(pitch) - (24 + njones::audio::KEY.size()));
              pitch_set = njones::audio::PITCH_SET.at(pitch_set_index).second;
              set_rotation();
-             set_parameter(kPitchSetId, static_cast<double>(pitch_set_index) / (njones::audio::PITCH_SET.size() - 1));
+             set_parameter(data, kPitchSetId,
+                           static_cast<double>(pitch_set_index) / (njones::audio::PITCH_SET.size() - 1));
          }},
         {{69, 101},
          [&](const int pitch) {
              // Max Combine Length
              max_length = pitch - 69;
-             set_parameter(kMaxLengthId, max_length / 32.0);
+             set_parameter(data, kMaxLengthId, max_length / 32.0);
          }},
         {{102, 118},
          [&](const int pitch) {
              // Beat Numerator
              beat_numerator = pitch - 101;
-             set_parameter(kBeatNumeratorId, beat_numerator / 16.0);
+             set_parameter(data, kBeatNumeratorId, beat_numerator / 16.0);
          }},
         {{119, 125},
          [&](const int pitch) {
              // Beat Denominator
              beat_denominator = pitch - 118;
-             set_parameter(kBeatDenominatorId, beat_denominator / 16.0);
+             set_parameter(data, kBeatDenominatorId, beat_denominator / 16.0);
          }},
         {{126, 126},
          [&](const int pitch) {
              // Beat Sync On/Off
              sync = !sync;
-             set_parameter(kSyncId, sync);
+             set_parameter(data, kSyncId, sync);
          }},
         {{127, 127},
          [&](const int pitch) {
              // Combine Notes On/Off
              combine_notes = !combine_notes;
-             set_parameter(kCombineNotesId, combine_notes);
+             set_parameter(data, kCombineNotesId, combine_notes);
          }},
     };
 
@@ -411,9 +426,9 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
     addEventOutput(STR16("Event Out"), 2);
 
     auto add_range_param = [&](const char* name, const int tag, const double min, const double max,
-                               const double default, const int steps) {
+                               const double default_setting, const int steps) {
         String name_str = name;
-        auto* new_param = new RangeParameter(name_str, tag, nullptr, min, max, default, steps);
+        auto* new_param = new RangeParameter(name_str, tag, nullptr, min, max, default_setting, steps);
         parameters.addParameter(new_param);
     };
 
@@ -727,14 +742,6 @@ enum {
 
 }  // namespace Vst
 }  // namespace Steinberg
-
-bool InitModule() {
-    return true;
-}
-
-bool DeinitModule() {
-    return true;
-}
 
 BEGIN_FACTORY_DEF("Neil F. Jones", "https://github.com/NFJones", "mailto:neil.jones.music@gmail.com")
 

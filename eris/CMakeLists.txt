@@ -22,10 +22,11 @@ if(SMTG_ADD_VSTGUI)
         resource/eris.uidesc
     )
 
+    project(eris VERSION 1.2.0)
     set(target eris)
     smtg_add_vst3plugin(${target} ${eris_sources})
-    target_link_libraries(${target} PRIVATE sdk vstgui_support a2m-static fftw3)
-    add_dependencies(${target} a2m-static)
+    target_link_libraries(${target} PRIVATE sdk vstgui_support a2m-static njonesaudiolib-static fftw3)
+    add_dependencies(${target} a2m-static njonesaudiolib-static)
 
     smtg_add_vst3_resource(${target} "resource/eris.uidesc")
     smtg_add_vst3_resource(${target} "resource/background.png")
