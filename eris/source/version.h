@@ -5,7 +5,7 @@
 #define MAJOR_VERSION_STR "1"
 #define MAJOR_VERSION_INT 1
 
-#define SUB_VERSION_STR "2"
+#define SUB_VERSION_STR "4"
 #define SUB_VERSION_INT 0
 
 #define RELEASE_NUMBER_STR "0"
