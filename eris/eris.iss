@@ -1,6 +1,6 @@
 [Setup]
 AppName=Eris
-AppVersion=1.4.0
+AppVersion=1.4.1
 DefaultDirName={cf}\VST3
 DefaultGroupName=Eris
 OutputBaseFilename=Eris-win64
