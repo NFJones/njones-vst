@@ -18,4 +18,5 @@ enum {
     kKeyId,
     kOctaveId,
     kTransposeId,
+    kWhimsyId,
 };

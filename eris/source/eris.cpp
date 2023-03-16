@@ -54,7 +54,8 @@ Eris::Eris()
       octave(0),
       ceiling(30),
       transpose(0),
-      tempo(0) {
+      tempo(0),
+      whimsy(0) {
     clear_buffers();
     set_beat();
     for (int32 channel = 0; channel < 2; ++channel)
@@ -167,9 +168,23 @@ void Eris::convert(ProcessData& data) {
 
     auto quantize = [&](int event_offset) -> int {
         if (sync) {
-            int block_number = event_offset / real_block_size;
-            int quantized_block_number = (block_number / beat_numerator) * beat_numerator;
-            int quantized_offset = quantized_block_number * real_block_size;
+            int quantized_offset;
+            bool on_beat = (static_cast<int32>(data.processContext->barPositionMusic) %
+                            (data.processContext->timeSigDenominator * data.processContext->timeSigNumerator)) == 0;
+            if (whimsy && !on_beat) {
+                // Legacy behavior that is incorrect, but sounds cool
+                const double bar_position =
+                    data.processContext->barPositionMusic - static_cast<int>(data.processContext->barPositionMusic);
+                const int bars_since_intersection = static_cast<int>(bar_position) % beat_numerator;
+                const double blocks_per_bar = (static_cast<double>(beat_denominator) / beat_numerator);
+                const double blocks_since_intersection = blocks_per_bar * bars_since_intersection;
+                const double first_block = blocks_since_intersection - static_cast<int>(blocks_since_intersection);
+                quantized_offset = first_block * block_size;
+            } else {
+                const int block_number = event_offset / real_block_size;
+                const int quantized_block_number = (block_number / beat_numerator) * beat_numerator;
+                quantized_offset = quantized_block_number * real_block_size;
+            }
             return quantized_offset;
         } else {
             return event_offset;
@@ -324,6 +339,11 @@ void Eris::process_parameters(ProcessData& data) {
                                 set_time_window(time_window_param);
                         }
                         break;
+                    case kWhimsyId:
+                        if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
+                            whimsy = static_cast<int>(value) == 1;
+                        }
+                        break;
                     case kTimeWindowId:
                         if (paramQueue->getPoint(numPoints - 1, sampleOffset, value) == kResultTrue) {
                             time_window_param = 1000 * value;
@@ -458,6 +478,7 @@ tresult PLUGIN_API Eris::initialize(FUnknown* context) {
     add_range_param("Transpose", kTransposeId, 0.0, 11.0, 0.0, 11);
     add_range_param("Octave", kOctaveId, -10.0, 10.0, 0.0, 20);
     add_list_param("Scale", kPitchSetId, njones::audio::PITCH_SET);
+    add_range_param("Whimsy", kWhimsyId, 0.0, 1.0, 1.0, 1);
 
     return result;
 }
@@ -526,6 +547,7 @@ tresult PLUGIN_API Eris::setState(IBStream* state) {
             converter.set_transpose(octave * 12 + transpose);
             setParamNormalized(kTransposeId, transpose / 11.0);
         });
+        read_param(whimsy, [&]() { setParamNormalized(kWhimsyId, whimsy); });
     } catch (const std::runtime_error&) {
         return kResultFalse;
     }

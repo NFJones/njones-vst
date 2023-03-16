@@ -101,6 +101,7 @@ class Eris : public SingleComponentEffect, public VSTGUI::VST3EditorDelegate, pu
     int32 note_max;
     int32 max_length;
     int32 ceiling;
+    int32 whimsy;
 
     std::vector<unsigned int> pitch_set;
     double time_window;
